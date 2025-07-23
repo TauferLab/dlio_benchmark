@@ -90,6 +90,21 @@ class DLIOBenchmark(object):
         self.comm_size = self.args.comm_size = DLIOMPI.get_instance().size()
         self.data_folder = self.args.data_folder
         self.storage_root = self.args.storage_root
+        try:
+            model_enum = Model(self.args.model)
+        except:
+            model_enum = Model.DEFAULT
+        if not self.args.compute:
+            model_enum = Model.DEFAULT
+        self.framework = FrameworkFactory().get_framework(
+            self.args.framework,
+            self.args.do_profiling,
+            model_enum,
+            self.args.communication,
+        )
+        self.storage = StorageFactory().get_storage(
+            self.args.storage_type, self.args.storage_root, self.args.framework
+        )
         if self.args.storage_root:
             self.storage.create_namespace(exist_ok=True)
 
@@ -137,10 +152,10 @@ class DLIOBenchmark(object):
             self.num_subfolders_eval = self.args.num_subfolders_eval
             self.num_samples = self.args.num_samples_per_file
             self.total_training_steps = self.args.total_training_steps
+            self.computation_time = self.args.computation_time
 
             self.epochs = self.args.epochs
             self.batch_size = self.args.batch_size
-            self.computation_time = self.args.computation_time
 
             if self.do_profiling:
                 self.profiler = ProfilerFactory().get_profiler(self.args.profiler)
@@ -330,9 +345,7 @@ class DLIOBenchmark(object):
             self.stats.eval_batch_loaded(epoch, step)
             eval_time = self.eval_time
             self.stats.start_compute()
-            print("starting compute")
             self.framework.compute(batch, epoch, step, eval_time)
-            print("Computed done")
             self.stats.eval_batch_processed(epoch, step)
             step += 1
             self.stats.start_loading()

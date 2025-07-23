@@ -115,7 +115,7 @@ class Model(Enum):
     """
     Different Model Architectures
     """
-    RESNET = 'resnet'
+    RESNET = 'resnet50'
     UNET= 'unet3d'
     BERT = 'bert'
     SLEEP = 'sleep'
