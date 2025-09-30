@@ -16,7 +16,7 @@ limitations under the License.
 """
 
 from dlio_benchmark.common.constants import MODULE_AI_FRAMEWORK
-from dlio_benchmark.utils.utility import Profile, dft_ai, sleep
+from dlio_benchmark.utils.utility import Profile, dft_ai, sleep, DLIOMPI
 from dlio_benchmark.model.model_factory import ModelFactory
 from dlio_benchmark.framework.framework import Framework
 from dlio_benchmark.profiler.profiler_factory import ProfilerFactory
@@ -47,7 +47,10 @@ class TFFramework(Framework):
         super().__init__()
         self.profiling = profiling
         self._model = ModelFactory.create_model(
-            FrameworkType.TENSORFLOW, model, communication
+            FrameworkType.TENSORFLOW,
+            model,
+            communication,
+            gpu_id=DLIOMPI.get_instance().local_rank(),
         )
         # TODO: Temporary fix, need to separate the iostat profiler (needed for report gen) and the others
         if profiling:
