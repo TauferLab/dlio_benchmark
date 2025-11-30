@@ -2,6 +2,12 @@ from typing import Any, Optional, Tuple
 import torch
 import torch.nn as nn
 
+from dftracer.dynamo import dft_fn as dyn_fn
+from dlio_benchmark.utils.utility import Profile
+
+dyn = dyn_fn("dynamo")
+dlp = Profile("PyTorchLayers")
+
 
 
 class PyTorchLayers:
@@ -61,8 +67,62 @@ class PyTorchLayers:
         )
         return self._register_layer(layer)
 
+    def conv3d(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = True,
+    ):
+        layer = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+        )
+        return self._register_layer(layer)
+
+    def conv_transpose3d(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = True,
+    ):
+        layer = nn.ConvTranspose3d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+        )
+        return self._register_layer(layer)
+
     def batch_norm(self, num_features: int):
         layer = nn.BatchNorm2d(num_features)
+        return self._register_layer(layer)
+
+    def batch_norm3d(self, num_features: int):
+        layer = nn.BatchNorm3d(num_features)
+        return self._register_layer(layer)
+
+    def instance_norm3d(self, num_features: int):
+        layer = nn.InstanceNorm3d(num_features, affine=True)
+        return self._register_layer(layer)
+
+    def sync_batch_norm(self, num_features: int):
+        layer = nn.SyncBatchNorm(num_features)
+        return self._register_layer(layer)
+
+    def identity(self):
+        layer = nn.Identity()
         return self._register_layer(layer)
 
     def relu(self):
@@ -149,6 +209,13 @@ class PyTorchLayers:
         layer = nn.LayerNorm(normalized_shape)
         return self._register_layer(layer)
 
+    def finalize(self):
+        if self.communication:
+            from torch.distributed import destroy_process_group
+            destroy_process_group()
+        self._layer_registry.clear()
+        
+
     def get_model(self, forward_fn: Any, ) -> nn.Module:
         if self._model is not None:
             return self._model
@@ -224,8 +291,7 @@ class PyTorchLayers:
             def forward(self, x: Any) -> Any:
                 return forward_fn(x)
         
-        self._model = Model(self._layer_registry)
-        #TODO: Set gpu - do we set by rank?
+        self._model = dyn.compile(Model(self._layer_registry))
         if self.gpu_id >= 0:
             if torch.cuda.is_available():
                 self._model = self._model.cuda("cuda:{}".format(self.gpu_id))
@@ -240,17 +306,54 @@ class PyTorchLayers:
         assert self._model is not None, "Model must be set before optimizer."
         self._optimizer = optimizer(self._model.parameters(), *args, **kwargs)
 
+
+    @dlp.log
+    def transform(self, input_data, target):
+        return input_data.cuda("cuda:{}".format(self.gpu_id)), target.cuda("cuda:{}".format(self.gpu_id))
+
+    @dlp.log
     def compute(self, input_data, target) -> None:
+        """Execute complete training step: forward pass + backward pass.
+        
+        Args:
+            input_data: Input tensor for the model
+            target: Target tensor for loss calculation
+        """
+        pred, loss = self.forward_pass(input_data, target)
+        self.backward_pass(loss)
+
+    @dlp.log
+    def forward_pass(self, input_data, target) -> Tuple[Any, Any]:
+        """Execute forward pass through the model and compute loss.
+        
+        Args:
+            input_data: Input tensor for the model
+            target: Target tensor for loss calculation
+            
+        Returns:
+            Tuple of (predictions, loss)
+        """
         assert self._model is not None
         assert self._optimizer is not None
 
         self._model.zero_grad()
         if self.gpu_id >= 0 and torch.cuda.is_available():
-            input_data = input_data.cuda("cuda:{}".format(self.gpu_id))
-            target = target.cuda("cuda:{}".format(self.gpu_id))
+            input_data, target = self.transform(input_data, target)
         pred = self._model(input_data)
-
         loss = self._loss_function(pred, target)
+        
+        return pred, loss
+
+    @dlp.log
+    def backward_pass(self, loss) -> None:
+        """Execute backward pass and update model weights.
+        
+        Args:
+            loss: Loss tensor from forward pass
+        """
+        assert self._model is not None
+        assert self._optimizer is not None
+        
         loss.backward()
         # print("weights before update:")
         # for name, param in self._model.named_parameters():
@@ -261,3 +364,4 @@ class PyTorchLayers:
         # for name, param in self._model.named_parameters():
         #     if param.requires_grad:
         #         print(f"{name}: {param.data}")
+

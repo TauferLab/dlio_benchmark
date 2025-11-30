@@ -105,8 +105,11 @@ class TFFramework(Framework):
         if self._model is None:
             sleep(computation_time)
         else:
-            self._model.compute(batch[0], batch[1])
             self._model.compute(batch)
+
+    def finalize(self):
+        if self._model is not None:
+            self._model.finalize()
 
     @dlp.log
     def get_loader(self, dataset_type=DatasetType.TRAIN):

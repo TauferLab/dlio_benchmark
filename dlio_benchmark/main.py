@@ -474,10 +474,9 @@ class DLIOBenchmark(object):
             if block_step == 1 and block != 1:
                 self.stats.start_block(epoch, block)
             self.stats.start_loading()
-
         # Always closes the current block. It is safe to call end_block for already ended block, as there's a guard inside.
         self.stats.end_block(epoch, block, block_step - 1)
-
+        self.framework.finalize()
         self.comm.barrier()
         if (
             self.do_checkpoint

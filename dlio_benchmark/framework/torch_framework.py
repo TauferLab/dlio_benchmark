@@ -100,11 +100,13 @@ class TorchFramework(Framework):
 
     def model(self, epoch, batch, computation_time):
         if self._model is None:
-            print("sleeping")
             sleep(computation_time)
         else:
-            print("Using model to compute")
             self._model.compute(batch)
+
+    def finalize(self):
+        if self._model is not None:
+            self._model.finalize()
 
     @dlp.log
     def get_loader(self, dataset_type=DatasetType.TRAIN):

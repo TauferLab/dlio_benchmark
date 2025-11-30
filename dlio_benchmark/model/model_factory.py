@@ -1,6 +1,7 @@
 from dlio_benchmark.common.enumerations import FrameworkType, Model
 from dlio_benchmark.model.model import UnifiedModel
 from dlio_benchmark.model.impl.resnet import ResNet50
+from dlio_benchmark.model.impl.unet3d import UNet3D
 
 
 class ModelFactory:
@@ -11,6 +12,8 @@ class ModelFactory:
     def create_model(framework: FrameworkType, model_type: Model, communication: bool = False, gpu_id: int = -1) -> UnifiedModel:
         if model_type == Model.RESNET:
             return ResNet50(framework, communication, gpu_id)
+        elif model_type == Model.UNET:
+            return UNet3D(framework, communication, gpu_id)
         elif model_type in (Model.SLEEP, Model.DEFAULT):
             return None
         raise ValueError(f"Unsupported model type: {model_type}")

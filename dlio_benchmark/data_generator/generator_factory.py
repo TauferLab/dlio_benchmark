@@ -47,6 +47,9 @@ class GeneratorFactory(object):
         elif type == FormatType.SYNTHETIC:
             from dlio_benchmark.data_generator.synthetic_generator import SyntheticGenerator
             return SyntheticGenerator()
+        elif type == FormatType.LOAD_MEM:
+            from dlio_benchmark.data_generator.synthetic_generator import SyntheticGenerator
+            return SyntheticGenerator()
         elif type == FormatType.INDEXED_BINARY or type == FormatType.MMAP_INDEXED_BINARY:
             from dlio_benchmark.data_generator.indexed_binary_generator import IndexedBinaryGenerator
             return IndexedBinaryGenerator()

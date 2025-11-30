@@ -40,7 +40,47 @@ class LayerFactoryBase(ABC):
         pass
 
     @abstractmethod
+    def conv3d(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = True,
+    ):
+        pass
+
+    @abstractmethod
+    def conv_transpose3d(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = True,
+    ):
+        pass
+
+    @abstractmethod
     def batch_norm(self, num_features: int):
+        pass
+
+    @abstractmethod
+    def batch_norm3d(self, num_features: int):
+        pass
+
+    @abstractmethod
+    def instance_norm3d(self, num_features: int):
+        pass
+
+    @abstractmethod
+    def sync_batch_norm(self, num_features: int):
+        pass
+
+    @abstractmethod
+    def identity(self):
         pass
 
     @abstractmethod

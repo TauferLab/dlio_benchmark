@@ -16,6 +16,7 @@ cd dlio_benchmark/
 pip install .
 dlio_benchmark ++workload.workflow.generate_data=True
 ```
+<<<<<<< HEAD
 
 ### Bare metal installation with AIStore support
 
@@ -25,6 +26,8 @@ cd dlio_benchmark/
 pip install .[aistore]
 ```
 
+=======
+>>>>>>> cd74d4e (added all changes)
 ### Bare metal installation with profiler
 
 ```bash
@@ -162,7 +165,16 @@ The YAML file is loaded through hydra (https://hydra.cc/). The default setting a
 
 * Storage backend support: we support local filesystem, AWS S3, and AIStore as storage backends. Other storage backends can be extended.
 
-* Data Loader support: we support reading datasets using TensorFlow tf.data data loader, PyTorch DataLoader, and a set of custom data readers implemented in ./reader. For TensorFlow tf.data data loader, PyTorch DataLoader  
+* Data Loader support: we support reading datasets using TensorFlow tf.data data loader, PyTorch DataLoader, Load Memory DataLoader, and a set of custom data readers implemented in ./reader. 
+  - **PyTorch DataLoader**: Standard PyTorch data loading with multi-threaded workers and prefetching
+  - **TensorFlow DataLoader**: TensorFlow tf.data pipeline for efficient data loading
+  - **Load Memory DataLoader** (`load_mem`): Preloads entire dataset into memory using PyTorch DataLoader, then serves batches from RAM. Useful for:
+    - Benchmarking pure compute performance by eliminating I/O overhead
+    - Small datasets that fit in memory
+    - Repeated epoch training where data can be cached
+    - Usage: Set `++workload.reader.data_loader=load_mem` in your configuration
+  - **Synthetic DataLoader** (`synthetic`): Generates zero-filled synthetic data without any I/O. Useful for testing framework overhead
+  - For TensorFlow tf.data data loader, PyTorch DataLoader  
   - We have complete support for tfrecord format in TensorFlow data loader. 
   - For npz, jpg, jpeg, hdf5, we currently only support one sample per file case. In other words, each sample is stored in an independent file. Multiple samples per file case will be supported in future. 
 

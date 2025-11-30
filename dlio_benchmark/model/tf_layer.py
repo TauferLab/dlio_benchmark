@@ -17,6 +17,10 @@ class TensorFlowLayers(LayerFactoryBase):
         self.communication = communication
         self.gpu_id = gpu_id
 
+    def finalize(self):
+        # TODO: Implement any necessary cleanup for TensorFlow
+        pass
+
     def _register_layer(self, layer: keras.layers.Layer, name: Optional[str] = None) -> keras.layers.Layer:
         """Register a layer for automatic model building"""
         if name is None:
@@ -60,8 +64,63 @@ class TensorFlowLayers(LayerFactoryBase):
         )
         return self._register_layer(layer)
 
+    def conv3d(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = True,
+    ):
+        layer = keras.layers.Conv3D(
+            filters=out_channels,
+            kernel_size=kernel_size,
+            strides=stride,
+            padding="same" if padding > 0 else "valid",
+            use_bias=bias,
+        )
+        return self._register_layer(layer)
+
+    def conv_transpose3d(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = True,
+    ):
+        layer = keras.layers.Conv3DTranspose(
+            filters=out_channels,
+            kernel_size=kernel_size,
+            strides=stride,
+            padding="same" if padding > 0 else "valid",
+            use_bias=bias,
+        )
+        return self._register_layer(layer)
+
     def batch_norm(self, num_features: int):
         layer = keras.layers.BatchNormalization()
+        return self._register_layer(layer)
+
+    def batch_norm3d(self, num_features: int):
+        layer = keras.layers.BatchNormalization()
+        return self._register_layer(layer)
+
+    def instance_norm3d(self, num_features: int):
+        # TensorFlow doesn't have a built-in InstanceNormalization3D
+        # We can use GroupNormalization with groups=num_features as an alternative
+        layer = tf.keras.layers.GroupNormalization(groups=num_features)
+        return self._register_layer(layer)
+
+    def sync_batch_norm(self, num_features: int):
+        # TensorFlow's BatchNormalization can be synchronized in distributed settings
+        layer = keras.layers.BatchNormalization(synchronized=True)
+        return self._register_layer(layer)
+
+    def identity(self):
+        layer = keras.layers.Lambda(lambda x: x)
         return self._register_layer(layer)
 
     def relu(self):

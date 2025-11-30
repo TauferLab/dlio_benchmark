@@ -46,11 +46,16 @@ class UnifiedModel(ABC):
         input_data, target_data = self.validate_data(batch)
         self.layer_factory.compute(input_data, target_data)
 
+    def finalize(self):
+        """Finalize the model, release resources if needed"""
+        self.layer_factory.finalize()
+
 class TorchModel(UnifiedModel):
     """Torch implementation of the unified model"""
 
     def __init__(self):
         super().__init__(FrameworkType.PYTORCH)
+
         
 
     

@@ -195,6 +195,7 @@ class DataLoaderType(Enum):
     CUSTOM='custom'
     NONE='none'
     SYNTHETIC='synthetic'
+    LOAD_MEM='load_mem'
     
     def __str__(self):
         return self.value

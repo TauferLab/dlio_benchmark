@@ -1,4 +1,4 @@
---extra-index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://download.pytorch.org/whl/cu124
 --extra-index-url https://developer.download.nvidia.com/compute/redist
 
 Pillow>=9.3.0

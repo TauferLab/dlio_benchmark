@@ -496,8 +496,11 @@ class ConfigArguments:
         if self.data_loader_sampler is None and self.data_loader_classname is None:
             if self.data_loader == DataLoaderType.TENSORFLOW:
                 self.data_loader_sampler = DataLoaderSampler.ITERATIVE
-            elif self.data_loader in [DataLoaderType.PYTORCH, DataLoaderType.DALI]:
+            elif self.data_loader in [DataLoaderType.PYTORCH, DataLoaderType.DALI, DataLoaderType.LOAD_MEM]:
                 self.data_loader_sampler = DataLoaderSampler.INDEX
+            else: 
+                # TODOMEET: Check with Hari on this
+                self.data_loader_sampler = DataLoaderSampler.ITERATIVE
         if self.data_loader_classname is not None:
             from dlio_benchmark.data_loader.base_data_loader import BaseDataLoader
             classname = self.data_loader_classname.split(".")[-1]

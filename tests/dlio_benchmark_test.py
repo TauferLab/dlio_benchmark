@@ -22,15 +22,18 @@ import shutil
 from mpi4py import MPI
 import pathlib
 
-from dlio_benchmark.common.enumerations import FrameworkType
+from dlio_benchmark.common.enumerations import FrameworkType, FormatType, DatasetType
 comm = MPI.COMM_WORLD
 import pytest
 import time
 import subprocess
 import logging
 import os
-from dlio_benchmark.utils.config import ConfigArguments
+import numpy as np
+from dlio_benchmark.utils.config import ConfigArguments, LoadConfig
 from dlio_benchmark.utils.utility import DLIOMPI
+from dlio_benchmark.data_loader.torch_data_loader import TorchDataLoader
+from dlio_benchmark.data_loader.load_mem_data_loader import LoadMemDataLoader
 import dlio_benchmark
 from tests.utils import TEST_TIMEOUT_SECONDS
 
@@ -753,16 +756,211 @@ def test_resnet_model_with_comms_enabled(framework) -> None:
     finalize()
 
 
+@pytest.mark.parametrize("framework", [FrameworkType.TENSORFLOW, FrameworkType.PYTORCH])
+def test_unet3d_model_with_compute_enabled(framework) -> None:
+    init()
+    clean()
+    if comm.rank == 0:
+        logging.info("")
+        logging.info("=" * 80)
+        logging.info(
+            f" DLIO test for UNet3D model with compute in {framework} framework"
+        )
+        logging.info("=" * 80)
+    with initialize_config_dir(version_base=None, config_dir=config_dir):
+        cfg = compose(
+            config_name="config",
+            overrides=[
+                "++workload.workflow.train=True",
+                "++workload.workflow.generate_data=True",
+                "++workload.model.name=unet3d",
+                f"++workload.framework={framework}",
+                f"++workload.reader.data_loader={framework}",
+                "++workload.train.epochs=1",
+                "++workload.dataset.num_files_train=8",
+                "++workload.dataset.num_samples_per_file=1",
+                "++workload.dataset.record_length_bytes=1048576",
+                "++workload.dataset.record_length_bytes_resize=1048576",
+                "++workload.dataset.format=npz",
+                "++workload.reader.read_threads=1",
+                "++workload.reader.batch_size=1",
+                "++workload.train.compute=True",
+            ],
+        )
+        benchmark = run_benchmark(cfg)
+    finalize()
+
+
+@pytest.mark.parametrize("framework", [FrameworkType.TENSORFLOW, FrameworkType.PYTORCH])
+def test_unet3d_model_with_comms_enabled(framework) -> None:
+    init()
+    clean()
+    if comm.rank == 0:
+        logging.info("")
+        logging.info("=" * 80)
+        logging.info(
+            f" DLIO test for UNet3D model with comms in {framework} framework"
+        )
+        logging.info("=" * 80)
+    with initialize_config_dir(version_base=None, config_dir=config_dir):
+        cfg = compose(
+            config_name="config",
+            overrides=[
+                "++workload.workflow.train=True",
+                "++workload.workflow.generate_data=True",
+                "++workload.model.name=unet3d",
+                f"++workload.framework={framework}",
+                f"++workload.reader.data_loader={framework}",
+                "++workload.train.epochs=1",
+                "++workload.dataset.num_files_train=8",
+                "++workload.dataset.num_samples_per_file=1",
+                "++workload.dataset.record_length_bytes=1048576",
+                "++workload.dataset.record_length_bytes_resize=1048576",
+                "++workload.dataset.format=npz",
+                "++workload.reader.read_threads=1",
+                "++workload.reader.batch_size=1",
+                "++workload.train.communication=True",
+                "++workload.train.compute=True",
+            ],
+        )
+        benchmark = run_benchmark(cfg)
+    finalize()
+
+
+@pytest.mark.timeout(120, method="thread")
+def test_load_mem_vs_torch_data_same() -> None:
+    """Test that load_mem_data_loader produces identical data to torch_data_loader for load_mem format"""
+    init()
+
+    if comm.rank == 0:
+        logging.info("")
+        logging.info("=" * 80)
+        logging.info(" Test: load_mem_data_loader vs torch_data_loader data comparison")
+        logging.info("=" * 80)
+
+    # Initialize configuration for load_mem format
+    with initialize_config_dir(version_base=None, config_dir=config_dir):
+        cfg = compose(config_name='config', overrides=[
+            '++workload.framework=pytorch',
+            '++workload.reader.data_loader=pytorch',
+            '++workload.dataset.format=jpeg',
+            '++workload.dataset.num_files_train=16',
+            '++workload.dataset.num_samples_per_file=1',
+            '++workload.reader.batch_size=4',
+            '++workload.reader.read_threads=2',
+            '++workload.dataset.record_length_bytes=65536',  # 256x256 image
+            '++workload.workflow.train=True',
+            '++workload.workflow.generate_data=True',
+            '++workload.train.epochs=1',
+            '++workload.train.computation_time=0'
+        ])
+
+    ConfigArguments.reset()
+    args = ConfigArguments.get_instance()
+    LoadConfig(args, OmegaConf.to_container(cfg['workload'], resolve=True))
+
+    # Derive configurations
+    # For synthetic format, create dummy file list entries to ensure proper sample calculation
+    # Since synthetic format doesn't actually read files, we just need placeholder entries
+    # num_files_train=16, num_samples_per_file=1 -> 16 total samples -> 4 batches with batch_size=4
+    file_list_train = [f"dummy_train_{i}" for i in range(args.num_files_train)]
+    file_list_eval = [f"dummy_eval_{i}" for i in range(args.num_files_eval)]
+    args.derive_configurations(file_list_train=file_list_train, file_list_eval=file_list_eval)
+    args.reconfigure(epoch_number=0)
+
+    if comm.rank == 0:
+        logging.info(f"Configuration loaded:")
+        logging.info(f"  Format: {args.format}")
+        logging.info(f"  Batch size: {args.batch_size}")
+        logging.info(f"  Read threads: {args.read_threads}")
+        logging.info(f"  Num samples: {args.total_samples_train}")
+        logging.info(f"  Resized image shape: {args.resized_image.shape}")
+        logging.info(f"  Resized image dtype: {args.resized_image.dtype}")
+
+    # Create both data loaders
+    epoch = 0
+    torch_loader = TorchDataLoader(FormatType.JPEG, DatasetType.TRAIN, epoch)
+    load_mem_loader = LoadMemDataLoader(FormatType.JPEG, DatasetType.TRAIN, epoch)
+
+    if comm.rank == 0:
+        logging.info("Data loaders created successfully")
+
+    # Read data from torch_data_loader
+    torch_loader.read()
+    torch_batches = []
+    for batch in torch_loader.next():
+        torch_batches.append(batch)
+
+    if comm.rank == 0:
+        logging.info(f"Torch loader read {len(torch_batches)} batches")
+
+    # Read data from load_mem_data_loader
+    load_mem_batches = []
+    for batch in load_mem_loader.next():
+        load_mem_batches.append(batch)
+
+    if comm.rank == 0:
+        logging.info(f"Load mem loader read {len(load_mem_batches)} batches")
+
+    # Compare number of batches
+    assert len(torch_batches) == len(load_mem_batches), \
+        f"Number of batches differ: torch={len(torch_batches)}, load_mem={len(load_mem_batches)}"
+
+    if comm.rank == 0:
+        logging.info(f"✓ Both loaders produced {len(torch_batches)} batches")
+
+    # Compare each batch
+    for idx, (torch_batch, load_mem_batch) in enumerate(zip(torch_batches, load_mem_batches)):
+        # Convert torch tensor to numpy if needed
+        if hasattr(torch_batch, 'numpy'):
+            torch_batch = torch_batch.numpy()
+        if hasattr(load_mem_batch, 'numpy'):
+            load_mem_batch = load_mem_batch.numpy()
+
+        # Check shapes match
+        assert torch_batch.shape == load_mem_batch.shape, \
+            f"Batch {idx} shapes differ: torch={torch_batch.shape}, load_mem={load_mem_batch.shape}"
+
+        # Check data types match
+        assert torch_batch.dtype == load_mem_batch.dtype, \
+            f"Batch {idx} dtypes differ: torch={torch_batch.dtype}, load_mem={load_mem_batch.dtype}"
+
+        # Check data values match (all should be the same resized_image)
+        assert np.array_equal(torch_batch, load_mem_batch), \
+            f"Batch {idx} data differs between torch and load_mem loaders"
+
+        if comm.rank == 0 and idx == 0:
+            logging.info(f"  Batch {idx}: shape={torch_batch.shape}, dtype={torch_batch.dtype}")
+            logging.info(f"  Batch {idx}: min={torch_batch.min()}, max={torch_batch.max()}")
+
+    if comm.rank == 0:
+        logging.info(f"✓ All {len(torch_batches)} batches match exactly between loaders")
+        logging.info("=" * 80)
+        logging.info(" TEST PASSED: load_mem_data_loader produces identical data to torch_data_loader")
+        logging.info("=" * 80)
+
+    # Cleanup
+    torch_loader.finalize()
+    load_mem_loader.finalize()
+
+    finalize()
+
+
 if __name__ == '__main__':
     def main():
         # for framework in [FrameworkType.TENSORFLOW, FrameworkType.PYTORCH]:
-        for framework in [FrameworkType.PYTORCH]:
-            print(f"\nRunning test_resnet_model_with_comms_enabled for {framework}...")
-            try:
-                test_resnet_model_with_comms_enabled(framework)
-                print(f"[SUCCESS] test_resnet_model_with_comms_enabled({framework}) completed.")
-            except Exception as e:
-                print(f"[FAIL] test_resnet_model_with_comms_enabled({framework}) failed: {e}")
+        # for framework in [FrameworkType.PYTORCH]:
+        #     print(f"\nRunning test_resnet_model_with_comms_enabled for {framework}...")
+        #     try:
+        #         test_resnet_model_with_comms_enabled(framework)
+        #         print(f"[SUCCESS] test_resnet_model_with_comms_enabled({framework}) completed.")
+        #     except Exception as e:
+        #         print(f"[FAIL] test_resnet_model_with_comms_enabled({framework}) failed: {e}")
+
+        # Run the test
+        test_synthetic_vs_torch_data_same()
+
+        
 
     if __name__ == '__main__':
         main()

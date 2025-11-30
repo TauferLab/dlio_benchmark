@@ -136,6 +136,13 @@ class ResNet50(UnifiedModel):
         try:
             if self.framework == FrameworkType.PYTORCH:
                 import torch
+                import numpy as np
+
+                # Convert numpy array to torch tensor if needed
+                if isinstance(data, np.ndarray):
+                    data = torch.from_numpy(data)
+                # print(data.shape, type(data))
+
                 if isinstance(data, torch.Tensor):
                     if len(data.shape) == 3:
                         # Duplicate array thrice to make three channels
