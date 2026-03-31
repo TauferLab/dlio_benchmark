@@ -9,7 +9,7 @@ class ModelFactory:
         pass
 
     @staticmethod
-    def create_model(framework: FrameworkType, model_type: Model, communication: bool = False, gpu_id: int = -1) -> UnifiedModel:
+    def create_model(framework: FrameworkType, model_type: Model, communication: bool = False, gpu_id: int = 0) -> UnifiedModel:
         if model_type == Model.RESNET:
             return ResNet50(framework, communication, gpu_id)
         elif model_type == Model.UNET:

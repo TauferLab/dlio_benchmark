@@ -16,6 +16,9 @@
 """
 import math
 import numpy as np
+import os
+import time
+import torch
 
 from dlio_benchmark.common.constants import MODULE_DATA_LOADER
 from dlio_benchmark.common.enumerations import DataLoaderType
@@ -23,6 +26,7 @@ from dlio_benchmark.data_loader.base_data_loader import BaseDataLoader
 from dlio_benchmark.utils.utility import utcnow, Profile, dft_ai
 
 dlp = Profile(MODULE_DATA_LOADER)
+ITER_TIME = float(os.environ.get('DLIO_SLEEP_TIME', 1))
 
 class SyntheticDataLoader(BaseDataLoader):
     @dlp.log_init
@@ -42,7 +46,10 @@ class SyntheticDataLoader(BaseDataLoader):
         self.num_batches = int(math.ceil(local_num_samples / self.batch_size))
         
         # Pre-create a batch of zeros
-        self.zero_batch = np.zeros((self.batch_size, shape[0], shape[1]), dtype=self._args.resized_image.dtype)
+        # Use pinned torch tensor instead, and expand to 4D to avoid overhead in validate_data
+        # Original logic in validate_data: data.unsqueeze(1).repeat(1, 3, 1, 1)
+        # This converts (N, H, W) -> (N, 3, H, W)
+        self.zero_batch = torch.zeros((self.batch_size, 3, shape[0], shape[1]), dtype=torch.uint8).pin_memory()
 
     @dlp.log
     def read(self, init=False):
@@ -73,6 +80,7 @@ class SyntheticDataLoader(BaseDataLoader):
 =======
         for step in dlp.iter(range(self.num_batches)):
             dlp.update(step=step)
+            time.sleep(ITER_TIME)
             yield self.zero_batch
 >>>>>>> cd74d4e (added all changes)
 

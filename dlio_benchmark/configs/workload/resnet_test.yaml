@@ -1,0 +1,28 @@
+workload:
+  model:
+    name: resnet50
+    type: cnn
+  framework: pytorch
+  output:
+    log_level: INFO
+  train:
+    epochs: 1
+    communication: true
+    compute: true
+    computation_time:
+      mean: 0.327076
+  workflow:
+    generate_data: false
+    train: true
+  dataset:
+    num_files_train: 10000
+    num_samples_per_file: 1
+    record_length_bytes: 1146600.07
+    record_length_bytes_resize: 150528
+    data_folder: data/bigfiles
+    format: jpeg
+  reader:
+    data_loader: pytorch
+    read_threads: 2
+    computation_threads: 1
+    batch_size: 1000

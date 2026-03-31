@@ -4,6 +4,9 @@
 from dlio_benchmark.common.enumerations import FrameworkType, Loss
 from dlio_benchmark.model.model import UnifiedModel
 from typing import Any, Optional, Tuple, Type, Union
+from dlio_benchmark.utils.utility import Profile
+
+dlp = Profile("ResNet50")
 
 #TODO: Verify correctness of resnet50
 
@@ -132,12 +135,13 @@ class ResNet50(UnifiedModel):
         
         return x
     
+    @dlp.log
     def validate_data(self, data: Any) -> Tuple[Any, Any]:
         try:
             if self.framework == FrameworkType.PYTORCH:
                 import torch
                 import numpy as np
-
+                
                 # Convert numpy array to torch tensor if needed
                 if isinstance(data, np.ndarray):
                     data = torch.from_numpy(data)
@@ -151,6 +155,8 @@ class ResNet50(UnifiedModel):
                         data = data.unsqueeze(1).unsqueeze(2).repeat(1, 3, 1, 1)
                     input_data = data.float()
                     # We can generate target data, since it is not input/output
+
+                    #TODO: ask hari if we need variation in this
                     target = torch.zeros((input_data.shape[0], self.num_classes))
                 else:
                     input_data, target = data
@@ -176,5 +182,12 @@ class ResNet50(UnifiedModel):
         except Exception as e:
             raise ValueError(f"Invalid data format: {e}")
 
+
+        # Log the sizes
+        # print("Input data shape: ", input_data.shape)
+        # print("Target shape: ", target.shape)
+
+        # torch loader
+# Input data shape:  torch.Size([50, 3, 387, 387])
+# Target shape:  torch.Size([50, 1000])
         return input_data, target
-    

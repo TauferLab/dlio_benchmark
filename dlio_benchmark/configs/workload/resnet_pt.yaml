@@ -8,14 +8,14 @@ output:
   log_level: INFO
 
 train: 
-  # communication: False 
-  # compute: False
+  epochs: 1
   communication: True 
   compute: True
+  # communication: True
   computation_time:
     # mean: 0.727076
     # mean: 0.659729
-    # mean: 0.327076
+    mean: 0.3304
     # stdev: 0.0932905
     # type: normal
 
@@ -24,18 +24,28 @@ workflow:
  train: True
 
 dataset:
-  num_files_train: 100000
+#  num_files_train: 1000000
+  # num_files_train: 100000 # Actual run 
+  num_files_train: 10000 # for testing
+  # num_files_train: 1000
   num_samples_per_file: 1
-  record_length_bytes: 114660.07
+  # record_length_bytes: 114660.07
+  record_length_bytes: 1146600.07
   record_length_bytes_resize: 150528
+  # record_length_bytes_resize: 150
   data_folder: new_data/resnet40
+  # data_folder: data/resnet40
+  # data_folder: data/resnetmassive
+  # data_folder: data/bigfiles
+  # data_folder: data/bigbigfiles
   format: jpeg
 
  
 reader:
-#  data_loader: load_mem
  data_loader: pytorch
- read_threads: 9
+ read_threads: 1
+ prefetch_size: 1
+ pin_memory: false
  computation_threads: 1
- batch_size: 50
+ batch_size: 200
 

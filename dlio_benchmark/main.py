@@ -258,7 +258,11 @@ class DLIOBenchmark(object):
                     file_list_train = fullpaths
                 elif dataset_type is DatasetType.VALID:
                     file_list_eval = fullpaths
-            if not self.generate_only and self.num_files_train > len(file_list_train):
+            if (
+                not self.generate_only
+                and self.num_files_train > len(file_list_train)
+                and self.args.data_loader != DataLoaderType.SYNTHETIC
+            ):
                 raise Exception(
                     "Not enough training dataset is found; Please run the code with ++workload.workflow.generate_data=True"
                 )
@@ -558,6 +562,8 @@ class DLIOBenchmark(object):
                     self.framework.get_loader(DatasetType.VALID).finalize()
                 self.args.reconfigure(epoch + 1)  # reconfigure once per epoch
                 self.stats.end_epoch(epoch)
+            # Finalize framework after all epochs complete
+            self.framework.finalize()
 
         if self.args.checkpoint_only:
             self._checkpoint()

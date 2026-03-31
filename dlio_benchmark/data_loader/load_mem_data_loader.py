@@ -17,15 +17,17 @@
 import logging
 import math
 import numpy as np
+import os
+import time
 
 from dlio_benchmark.common.constants import MODULE_DATA_LOADER
 from dlio_benchmark.common.enumerations import DataLoaderType
 from dlio_benchmark.data_loader.base_data_loader import BaseDataLoader
 from dlio_benchmark.data_loader.torch_data_loader import TorchDataLoader
 from dlio_benchmark.utils.utility import Profile
-from tqdm import tqdm
 
 dlp = Profile(MODULE_DATA_LOADER)
+ITER_TIME = float(os.environ.get('DLIO_SLEEP_TIME', 1))
 
 class LoadMemDataLoader(BaseDataLoader):
     """
@@ -79,9 +81,37 @@ class LoadMemDataLoader(BaseDataLoader):
         self._torch_loader.read()
         # Use the torch loader to read all batches into memory
 
-        self.logger.output("Preloading data")
-        for batch in tqdm(self._torch_loader.next()):
+        self.logger.info("Preloading data")
+        batch_num = 0
+        import torch
+        for batch in self._torch_loader.next():
+            # Preprocess the batch to avoid overhead during benchmark loop
+            # Unpack batch (it might be tuple or just input)
+            if isinstance(batch, (tuple, list)):
+                input_data = batch[0]
+                target = batch[1] if len(batch) > 1 else None
+            else:
+                input_data = batch
+                target = None
+
+            if isinstance(input_data, torch.Tensor):
+                # Expand channels if needed (N, H, W) -> (N, 3, H, W)
+                if len(input_data.shape) == 3:
+                     input_data = input_data.unsqueeze(1).repeat(1, 3, 1, 1)
+                
+                # Ensure it is pinned for faster transfer
+                if not input_data.is_pinned():
+                    input_data = input_data.pin_memory()
+                
+                # Re-pack batch
+                if isinstance(batch, (tuple, list)):
+                    batch = (input_data, *batch[1:])
+                else:
+                    batch = input_data
+
+            self.logger.info(f"Rank {self._args.my_rank} Loaded batch {batch_num}")
             self._preloaded_batches.append(batch)
+            batch_num += 1
         
         self._preloaded = True
         
@@ -98,13 +128,15 @@ class LoadMemDataLoader(BaseDataLoader):
             self.read(True)
         
         # Yield from preloaded batches
-        for step, batch in dlp.iter(enumerate(self._preloaded_batches)):
+        for step, batch in dlp.iter(enumerate(self._preloaded_batches, 1)):
             dlp.update(step=step)
+            time.sleep(ITER_TIME)
             yield batch
 
     @dlp.log
     def finalize(self):
         """Clean up resources"""
         self._torch_loader.finalize()
-        self._preloaded_batches = []
+        # Note: We intentionally do NOT clear _preloaded_batches here
+        # The purpose of load_mem is to keep data in memory across epochs
         return

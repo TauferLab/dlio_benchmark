@@ -1,18 +1,18 @@
 """
-   Copyright (c) 2025, UChicago Argonne, LLC
-   All Rights Reserved
+Copyright (c) 2025, UChicago Argonne, LLC
+All Rights Reserved
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-       http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
 
 import os
@@ -33,39 +33,49 @@ from dftracer.python import (
     dftracer as PerfTrace,
     dft_fn as Profile,
     ai as dft_ai,
-    DFTRACER_ENABLE
+    DFTRACER_ENABLE,
 )
 
 LOG_TS_FORMAT = "%Y-%m-%dT%H:%M:%S.%f"
 
 OUTPUT_LEVEL = 35
 logging.addLevelName(OUTPUT_LEVEL, "OUTPUT")
+
+
 def output(self, message, *args, **kwargs):
     if self.isEnabledFor(OUTPUT_LEVEL):
         self._log(OUTPUT_LEVEL, message, args, **kwargs)
+
+
 logging.Logger.output = output
+
 
 class DLIOLogger:
     __instance = None
 
     def __init__(self):
         self.logger = logging.getLogger("DLIO")
-        #self.logger.setLevel(logging.DEBUG)
+        # self.logger.setLevel(logging.DEBUG)
         if DLIOLogger.__instance is not None:
             raise Exception(f"Class {self.classname()} is a singleton!")
         else:
             DLIOLogger.__instance = self
+
     @staticmethod
     def get_instance():
         if DLIOLogger.__instance is None:
             DLIOLogger()
         return DLIOLogger.__instance.logger
+
     @staticmethod
     def reset():
         DLIOLogger.__instance = None
+
+
 # MPI cannot be initialized automatically, or read_thread spawn/forkserver
 # child processes will abort trying to open a non-existant PMI_fd file.
 import mpi4py
+
 p = psutil.Process()
 
 
@@ -95,9 +105,10 @@ class DLIOMPI:
             DLIOMPI.__instance = self
 
     @staticmethod
-    def get_instance():
+    def get_instance() -> "DLIOMPI":
         if DLIOMPI.__instance is None:
             DLIOMPI()
+        assert DLIOMPI.__instance is not None
         return DLIOMPI.__instance
 
     @staticmethod
@@ -110,11 +121,12 @@ class DLIOMPI:
 
     def initialize(self):
         from mpi4py import MPI
+
         if self.mpi_state == MPIState.UNINITIALIZED:
             # MPI may have already been initialized by dlio_benchmark_test.py
             if not MPI.Is_initialized():
                 MPI.Init()
-            
+
             self.mpi_state = MPIState.MPI_INITIALIZED
             split_comm = MPI.COMM_WORLD.Split_type(MPI.COMM_TYPE_SHARED)
             # Number of processes on this node and local rank
@@ -141,13 +153,18 @@ class DLIOMPI:
             offsets = [0] + list(np.cumsum(self.mpi_ppn_list)[:-1])
             # Determine which node this rank belongs to
             for idx, off in enumerate(offsets):
-                if self.mpi_rank >= off and self.mpi_rank < off + self.mpi_ppn_list[idx]:
+                if (
+                    self.mpi_rank >= off
+                    and self.mpi_rank < off + self.mpi_ppn_list[idx]
+                ):
                     self.mpi_node = idx
                     break
         elif self.mpi_state == MPIState.CHILD_INITIALIZED:
-            raise Exception(f"method {self.classname()}.initialize() called in a child process")
+            raise Exception(
+                f"method {self.classname()}.initialize() called in a child process"
+            )
         else:
-            pass    # redundant call
+            pass  # redundant call
 
     # read_thread processes need to know their parent process's rank and comm_size,
     # but are not MPI processes themselves.
@@ -158,19 +175,27 @@ class DLIOMPI:
             self.mpi_size = parent_comm_size
             self.mpi_world = None
         elif self.mpi_state == MPIState.MPI_INITIALIZED:
-            raise Exception(f"method {self.classname()}.set_parent_values() called in a MPI process")
+            raise Exception(
+                f"method {self.classname()}.set_parent_values() called in a MPI process"
+            )
         else:
-            raise Exception(f"method {self.classname()}.set_parent_values() called twice")
+            raise Exception(
+                f"method {self.classname()}.set_parent_values() called twice"
+            )
 
     def rank(self):
         if self.mpi_state == MPIState.UNINITIALIZED:
-            raise Exception(f"method {self.classname()}.rank() called before initializing MPI")
+            raise Exception(
+                f"method {self.classname()}.rank() called before initializing MPI"
+            )
         else:
             return self.mpi_rank
 
     def size(self):
         if self.mpi_state == MPIState.UNINITIALIZED:
-            raise Exception(f"method {self.classname()}.size() called before initializing MPI")
+            raise Exception(
+                f"method {self.classname()}.size() called before initializing MPI"
+            )
         else:
             return self.mpi_size
 
@@ -178,47 +203,65 @@ class DLIOMPI:
         if self.mpi_state == MPIState.MPI_INITIALIZED:
             return self.mpi_world
         elif self.mpi_state == MPIState.CHILD_INITIALIZED:
-            raise Exception(f"method {self.classname()}.comm() called in a child process")
+            raise Exception(
+                f"method {self.classname()}.comm() called in a child process"
+            )
         else:
-            raise Exception(f"method {self.classname()}.comm() called before initializing MPI")
+            raise Exception(
+                f"method {self.classname()}.comm() called before initializing MPI"
+            )
 
     def local_rank(self):
         if self.mpi_state == MPIState.UNINITIALIZED:
-            raise Exception(f"method {self.classname()}.size() called before initializing MPI")
+            raise Exception(
+                f"method {self.classname()}.size() called before initializing MPI"
+            )
         else:
             return self.mpi_local_rank
 
     def npernode(self):
         if self.mpi_state == MPIState.UNINITIALIZED:
-            raise Exception(f"method {self.classname()}.size() called before initializing MPI")
+            raise Exception(
+                f"method {self.classname()}.size() called before initializing MPI"
+            )
         else:
             return self.mpi_ppn_list[self.mpi_node]
+
     def nnodes(self):
         if self.mpi_state == MPIState.UNINITIALIZED:
-            raise Exception(f"method {self.classname()}.size() called before initializing MPI")
+            raise Exception(
+                f"method {self.classname()}.size() called before initializing MPI"
+            )
         else:
             return self.mpi_nodes
-    
+
     def node(self):
         """
         Return the node index for this rank.
         """
         if self.mpi_state == MPIState.UNINITIALIZED:
-            raise Exception(f"method {self.classname()}.node() called before initializing MPI")
+            raise Exception(
+                f"method {self.classname()}.node() called before initializing MPI"
+            )
         else:
             return self.mpi_node
-    
+
     def reduce(self, num):
         from mpi4py import MPI
+
         if self.mpi_state == MPIState.UNINITIALIZED:
-            raise Exception(f"method {self.classname()}.reduce() called before initializing MPI")
+            raise Exception(
+                f"method {self.classname()}.reduce() called before initializing MPI"
+            )
         else:
             return MPI.COMM_WORLD.allreduce(num, op=MPI.SUM)
-    
+
     def finalize(self):
         from mpi4py import MPI
+
         if self.mpi_state == MPIState.MPI_INITIALIZED and MPI.Is_initialized():
             MPI.Finalize()
+
 
 def timeit(func):
     @wraps(func)
@@ -231,16 +274,20 @@ def timeit(func):
     return wrapper
 
 
-def progress(count, total, status=''):
+def progress(count, total, status=""):
     """
     Printing a progress bar. Will be in the stdout when debug mode is turned on
     """
     bar_len = 60
     filled_len = int(round(bar_len * count / float(total)))
     percents = round(100.0 * count / float(total), 1)
-    bar = '=' * filled_len + ">" + '-' * (bar_len - filled_len)
+    bar = "=" * filled_len + ">" + "-" * (bar_len - filled_len)
     if DLIOMPI.get_instance().rank() == 0:
-        DLIOLogger.get_instance().info("\r[INFO] {} {}: [{}] {}% {} of {} ".format(utcnow(), status, bar, percents, count, total))
+        DLIOLogger.get_instance().info(
+            "\r[INFO] {} {}: [{}] {}% {} of {} ".format(
+                utcnow(), status, bar, percents, count, total
+            )
+        )
         if count == total:
             DLIOLogger.get_instance().info("")
         os.sys.stdout.flush()
@@ -249,12 +296,12 @@ def progress(count, total, status=''):
 def str2bool(v):
     if isinstance(v, bool):
         return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+    if v.lower() in ("yes", "true", "t", "y", "1"):
         return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+    elif v.lower() in ("no", "false", "f", "n", "0"):
         return False
     else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
+        raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
 class NpEncoder(json.JSONEncoder):
@@ -285,17 +332,18 @@ def create_dur_event(name, cat, ts, dur, args={}):
         "ts": ts * 1000000,
         "dur": dur * 1000000,
         "ph": "X",
-        "args": args
+        "args": args,
     }
     return d
 
-  
+
 def get_trace_name(output_folder, use_pid=False):
     val = ""
     if use_pid:
         val = f"-{os.getpid()}"
     return f"{output_folder}/trace-{DLIOMPI.get_instance().rank()}-of-{DLIOMPI.get_instance().size()}{val}.pfw"
-        
+
+
 def sleep(config):
     sleep_time = 0.0
     if isinstance(config, dict) and len(config) > 0:
@@ -323,6 +371,7 @@ def sleep(config):
         base_sleep(sleep_time)
     return sleep_time
 
+
 def gen_random_tensor(shape, dtype, rng=None):
     if rng is None:
         rng = np.random.default_rng()
@@ -333,7 +382,7 @@ def gen_random_tensor(shape, dtype, rng=None):
             return arr.astype(dtype)
         else:
             return rng.random(size=shape, dtype=dtype)
-    
+
     # For integer dtypes, generate float32 first then scale and cast
     dtype_info = np.iinfo(dtype)
     records = rng.random(size=shape, dtype=np.float32)

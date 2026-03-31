@@ -3,20 +3,28 @@ import torch
 import torch.nn as nn
 
 from dftracer.dynamo import dft_fn as dyn_fn
+from dftracer.python.ai_common import dftracer as dft_inst
 from dlio_benchmark.utils.utility import Profile
+import time
 
-dyn = dyn_fn("dynamo")
+# Separate instances: one for graph instrumentation (no profiler wrapper to avoid nesting),
+# one for wrapping the full training step with pytorch profiler
+dyn_compile = dyn_fn("dynamo", profiler=False)
+dyn_profiler = dyn_fn("dynamo", profiler=True, profiler_activities=["cpu", "cuda"])
 dlp = Profile("PyTorchLayers")
 
 
 
+BATCH_SIZE_FACTOR = 4
+
 class PyTorchLayers:
     """Factory class for creating PyTorch layers"""
-
     def __init__(self, loss_function, communication: bool = False, gpu_id: int = -1) -> None:
         super().__init__()
-        self._optimizer = None
-        self._model = None
+        self._optimizer: Any = None
+        self._model: Any = None
+        self._raw_model: Any = None
+        self._train_step: Optional[Any] = None
         self._loss_function = loss_function
         self._layer_registry = {}  # Track created layers
         self.communication = communication
@@ -216,7 +224,7 @@ class PyTorchLayers:
         self._layer_registry.clear()
         
 
-    def get_model(self, forward_fn: Any, ) -> nn.Module:
+    def get_model(self, forward_fn: Any) -> Any:
         if self._model is not None:
             return self._model
 
@@ -234,7 +242,8 @@ class PyTorchLayers:
             master_addr = DLIOMPI.get_instance().comm().bcast(master_addr, root=0)
             world_size = DLIOMPI.get_instance().size()
             os.environ["MASTER_ADDR"] = master_addr
-            os.environ["MASTER_PORT"] = str(2345)
+            # Use environment variable for port if available, otherwise default to 2345
+            os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "2345")
             dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo", rank=rank, world_size=world_size)
 
         class Model(nn.Module):
@@ -291,25 +300,50 @@ class PyTorchLayers:
             def forward(self, x: Any) -> Any:
                 return forward_fn(x)
         
-        self._model = dyn.compile(Model(self._layer_registry))
+        
+        # Create the model first
+        self._model = Model(self._layer_registry)
+        
+        # Move to GPU BEFORE compiling to avoid device mismatch issues
         if self.gpu_id >= 0:
             if torch.cuda.is_available():
-                self._model = self._model.cuda("cuda:{}".format(self.gpu_id))
+                self._model = self._model.cuda(torch.device(f"cuda:{self.gpu_id}"))
             else:
                 print("Warning: CUDA not available, running on CPU.")
                 self._model = self._model.cpu()
+        
+        
+        # Wrap with DDP BEFORE compile - dyn.compile returns a function, not nn.Module
         if self.communication:
             from torch.nn.parallel import DistributedDataParallel as DDP
             self._model = DDP(self._model)
+
+        # Save raw model ref before compile - dyn.compile with profiler wraps into a function
+        self._raw_model = self._model
+        # Dynamo compile disabled — CUPTI provides GPU-side tracing directly
+        # self._model = dyn_compile.compile(self._model, autograd=True)
+        # self._model = torch.compile(self._model, backend="inductor")
+
         return self._model
     def set_optimizer(self, optimizer, *args, **kwargs):
         assert self._model is not None, "Model must be set before optimizer."
-        self._optimizer = optimizer(self._model.parameters(), *args, **kwargs)
+        # Use _raw_model for parameters since _model may be a compiled wrapper function
+        model = self._raw_model if self._raw_model is not None else self._model
+        self._optimizer = optimizer(model.parameters(), *args, **kwargs)
 
 
     @dlp.log
     def transform(self, input_data, target):
-        return input_data.cuda("cuda:{}".format(self.gpu_id)), target.cuda("cuda:{}".format(self.gpu_id))
+        if BATCH_SIZE_FACTOR > 1:
+            batch_size = input_data.shape[0]
+            samples_to_load = batch_size // BATCH_SIZE_FACTOR
+            if samples_to_load > 0:
+                input_data = input_data[:samples_to_load]
+                target = target[:samples_to_load]
+        
+        input_cuda = input_data.cuda("cuda:{}".format(self.gpu_id))
+        target_cuda = target.cuda("cuda:{}".format(self.gpu_id))
+        return input_cuda, target_cuda
 
     @dlp.log
     def compute(self, input_data, target) -> None:
@@ -319,8 +353,26 @@ class PyTorchLayers:
             input_data: Input tensor for the model
             target: Target tensor for loss calculation
         """
-        pred, loss = self.forward_pass(input_data, target)
-        self.backward_pass(loss)
+        if self._train_step is None:
+            dft = dft_inst.get_instance()
+            def train_step(step_input, step_target):
+                t0 = dft.get_time()
+                pred, loss = self.forward_pass(step_input, step_target)
+                t1 = dft.get_time()
+                dft.log_event("forward_pass", "PyTorchLayers", int(t0), int(t1 - t0))
+
+                t2 = dft.get_time()
+                self.backward_pass(loss)
+                t3 = dft.get_time()
+                dft.log_event("backward_pass", "PyTorchLayers", int(t2), int(t3 - t2))
+
+                return pred, loss
+
+
+            # CUPTI provides GPU-side tracing directly, no need for PyTorch profiler wrapper
+            self._train_step = train_step
+
+        self._train_step(input_data, target)
 
     @dlp.log
     def forward_pass(self, input_data, target) -> Tuple[Any, Any]:
@@ -336,9 +388,12 @@ class PyTorchLayers:
         assert self._model is not None
         assert self._optimizer is not None
 
-        self._model.zero_grad()
+        # Use _raw_model for zero_grad since _model may be a compiled wrapper function
+        raw = self._raw_model if self._raw_model is not None else self._model
+        raw.zero_grad()
         if self.gpu_id >= 0 and torch.cuda.is_available():
             input_data, target = self.transform(input_data, target)
+
         pred = self._model(input_data)
         loss = self._loss_function(pred, target)
         
@@ -364,4 +419,3 @@ class PyTorchLayers:
         # for name, param in self._model.named_parameters():
         #     if param.requires_grad:
         #         print(f"{name}: {param.data}")
-

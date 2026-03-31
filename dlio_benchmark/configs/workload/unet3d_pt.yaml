@@ -5,28 +5,35 @@ model:
 framework: pytorch
 
 train:
-  communication: False
+  # communication: False
+  # compute: False
+  communication: True
   compute: True
+  epochs: 15
   computation_time:
     shape: 55.8006
     scale: 0.0129793
     type: gamma
+  # total_training_steps: 300
 
 workflow:
  generate_data: False
  train: True
 
 dataset:
-  num_files_train: 168
+  num_files_train: 300
   num_samples_per_file: 1
-  record_length_bytes: 146600628
-  data_folder: data/unet3d/
+  # record_length_bytes: 146600628
+  record_length_bytes: 146600
+  data_folder: data/unet3d_small/
   format: npz
 
 
 reader:
- data_loader: pytorch
+#  data_loader: pytorch
+ data_loader: synthetic
+#  data_loader: synthetic
  read_threads: 4
  computation_threads: 1
- batch_size: 7
+ batch_size: 2
 

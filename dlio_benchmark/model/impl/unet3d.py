@@ -1,6 +1,9 @@
 from dlio_benchmark.common.enumerations import FrameworkType, Loss
 from dlio_benchmark.model.model import UnifiedModel
 from typing import Any, Tuple
+from dlio_benchmark.utils.utility import Profile
+
+dlp = Profile("UNET3d")
 
 
 class ConvBlock3D:
@@ -104,22 +107,43 @@ class UpsampleBlock:
             x_size = x.shape[2:]
             skip_size = skip.shape[2:]
 
-            # If sizes don't match, pad or crop to match
-            if x_size != skip_size:
-                # Calculate padding needed
-                pad_d = skip_size[0] - x_size[0]
-                pad_h = skip_size[1] - x_size[1]
-                pad_w = skip_size[2] - x_size[2]
+            # Size matching for skip connections
 
-                if pad_d >= 0 and pad_h >= 0 and pad_w >= 0:
-                    # Pad x to match skip size
-                    # F.pad expects (left, right, top, bottom, front, back)
+            # If sizes don't match, make them match
+            if x_size != skip_size:
+                # We need to make both tensors have the same spatial dimensions
+                # Strategy: pad the smaller one or crop the larger one to match
+                
+                # For each dimension, determine target size (use the larger of the two)
+                target_d = max(x_size[0], skip_size[0])
+                target_h = max(x_size[1], skip_size[1])
+                target_w = max(x_size[2], skip_size[2])
+                
+                # Pad x if needed
+                if x_size[0] < target_d or x_size[1] < target_h or x_size[2] < target_w:
+                    pad_d = target_d - x_size[0]
+                    pad_h = target_h - x_size[1]
+                    pad_w = target_w - x_size[2]
                     x = F.pad(x, (0, pad_w, 0, pad_h, 0, pad_d))
-                else:
-                    # Crop skip to match x size (shouldn't happen in typical U-Net)
-                    skip = skip[:, :, :x_size[0], :x_size[1], :x_size[2]]
+                
+                # Crop x if needed
+                if x.shape[2] > target_d or x.shape[3] > target_h or x.shape[4] > target_w:
+                    x = x[:, :, :target_d, :target_h, :target_w]
+                
+                # Pad skip if needed
+                if skip_size[0] < target_d or skip_size[1] < target_h or skip_size[2] < target_w:
+                    pad_d = target_d - skip_size[0]
+                    pad_h = target_h - skip_size[1]
+                    pad_w = target_w - skip_size[2]
+                    skip = F.pad(skip, (0, pad_w, 0, pad_h, 0, pad_d))
+                
+                # Crop skip if needed
+                if skip.shape[2] > target_d or skip.shape[3] > target_h or skip.shape[4] > target_w:
+                    skip = skip[:, :, :target_d, :target_h, :target_w]
 
             x = torch.cat((x, skip), dim=1)
+
+
         else:  # TensorFlow
             import tensorflow as tf
 
@@ -176,6 +200,7 @@ class UNet3D(UnifiedModel):
         self.normalization = normalization
         self.activation = activation
         self.weights_init_scale = weights_init_scale
+        self._target_spatial_shape = None
 
         self.build_model()
         self._model = self.layer_factory.get_model(self.forward)
@@ -211,8 +236,9 @@ class UNet3D(UnifiedModel):
             )
             self.downsample_blocks.append(block)
 
-        # Bottleneck
-        self.bottleneck = DownsampleBlock(
+
+        # Bottleneck - use InputBlock instead of DownsampleBlock to avoid extra downsampling
+        self.bottleneck = InputBlock(
             self.layer_factory, self.framework,
             filters[-1], filters[-1],
             normalization=self.normalization,
@@ -221,16 +247,7 @@ class UNet3D(UnifiedModel):
 
         # Upsample path (decoder)
         self.upsample_blocks = []
-        # First upsample from bottleneck
-        self.upsample_blocks.append(
-            UpsampleBlock(
-                self.layer_factory, self.framework,
-                filters[-1], filters[-1],
-                normalization=self.normalization,
-                activation=self.activation
-            )
-        )
-        # Remaining upsamples
+        # Upsamples should match the number of downsamples
         for i in range(len(filters) - 1, 0, -1):
             block = UpsampleBlock(
                 self.layer_factory, self.framework,
@@ -239,6 +256,7 @@ class UNet3D(UnifiedModel):
                 activation=self.activation
             )
             self.upsample_blocks.append(block)
+
 
         # Output layer
         self.output_layer = OutputLayer(
@@ -251,16 +269,17 @@ class UNet3D(UnifiedModel):
         # Input block
         x = self.input_block(x)
 
-        # Encoder path - save outputs for skip connections
-        outputs = [x]
+        # Encoder path - save outputs BEFORE downsampling for skip connections
+        outputs = []
         for downsample in self.downsample_blocks:
+            outputs.append(x)  # Save BEFORE downsampling
             x = downsample(x)
-            outputs.append(x)
 
         # Bottleneck
         x = self.bottleneck(x)
 
         # Decoder path with skip connections
+        # Skip connections come from outputs in reverse order
         for upsample, skip in zip(self.upsample_blocks, reversed(outputs)):
             x = upsample(x, skip)
 
@@ -269,6 +288,38 @@ class UNet3D(UnifiedModel):
 
         return x
 
+    @dlp.log
+    def compute(self, batch):
+        """Override compute to handle target resizing to match prediction dimensions"""
+        import torch
+        import torch.nn.functional as F
+        
+        input_data, target_data = self.validate_data(batch)
+        
+        # Do a forward pass to get the prediction shape if not already cached
+        if self._target_spatial_shape is None:
+            # Move input to GPU for shape inference
+            if self.layer_factory.gpu_id >= 0 and torch.cuda.is_available():
+                input_data = input_data.cuda("cuda:{}".format(self.layer_factory.gpu_id))
+            
+            with torch.no_grad():
+                pred_shape = self._model(input_data).shape
+            self._target_spatial_shape = pred_shape[2:]
+
+        # Resize target to match prediction spatial dimensions
+        if target_data.shape[1:] != self._target_spatial_shape:
+            # Target should be (B, D, H, W), pred is (B, C, D, H, W)
+            target_size = self._target_spatial_shape  # (D, H, W)
+            # Interpolate target to match prediction size
+            # Add channel dim for interpolation, then remove it
+            target_data = target_data.unsqueeze(1).float()  # (B, 1, D, H, W)
+            target_data = F.interpolate(target_data, size=target_size, mode='nearest')
+            target_data = target_data.squeeze(1).long()  # (B, D, H, W)
+        
+        # Now do the actual compute
+        self.layer_factory.compute(input_data, target_data)
+
+    @dlp.log
     def validate_data(self, data: Any) -> Tuple[Any, Any]:
         """Validate and preprocess 3D medical imaging data"""
         try:
@@ -297,11 +348,29 @@ class UNet3D(UnifiedModel):
                         raise ValueError(f"Expected 3D, 4D or 5D tensor, got shape {data.shape}")
 
                     input_data = data.float()
-                    # Generate dummy target with same spatial dimensions
-                    # Target shape: (B, D, H, W) for cross entropy
+                    # Generate dummy target with spatial dimensions matching model output
+                    # UNet3D has 4 downsample blocks (each with stride=2) and 4 upsample blocks
+                    # Net effect: spatial dimensions stay roughly the same but may vary slightly
+                    # due to padding/cropping in skip connections
+                    # Target shape: (B, D, H, W) for cross entropy (no channel dim)
                     batch_size = input_data.shape[0]
-                    spatial_shape = input_data.shape[2:]  # (D, H, W)
-                    target = torch.zeros((batch_size, *spatial_shape), dtype=torch.long)
+                    input_spatial = input_data.shape[2:]  # (D, H, W)
+                    
+                    # The output spatial dims are affected by downsampling and upsampling
+                    # With 4 downsamples (stride 2) and 4 upsamples (stride 2), 
+                    # the net effect depends on padding/cropping
+                    # For simplicity, estimate output size based on the architecture:
+                    # After 4 downsamples: D/16, H/16, W/16
+                    # After 4 upsamples: back to ~D, ~H, ~W (with some padding)
+                    # The actual output will be slightly larger due to padding in upsamples
+                    # Use a heuristic: output is roughly input size * 16 / 16 with some padding
+                    output_d = input_spatial[0] * 16  # Rough estimate
+                    output_h = input_spatial[1]  # Stays roughly the same
+                    output_w = input_spatial[2]  # Stays roughly the same
+
+                    #TODO: can we do this
+                    target = torch.zeros((batch_size, output_d, output_h, output_w), dtype=torch.long)
+
                 else:
                     input_data, target = data
             else:  # TensorFlow
