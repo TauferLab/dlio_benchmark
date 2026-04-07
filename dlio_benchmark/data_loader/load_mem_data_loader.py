@@ -128,8 +128,10 @@ class LoadMemDataLoader(BaseDataLoader):
             self.read(True)
         
         # Yield from preloaded batches
-        for step, batch in dlp.iter(enumerate(self._preloaded_batches, 1)):
+        step = 1
+        for batch in dlp.iter(self._preloaded_batches):
             dlp.update(step=step)
+            step += 1
             time.sleep(ITER_TIME)
             yield batch
 
