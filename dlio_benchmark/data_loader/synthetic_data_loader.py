@@ -27,6 +27,7 @@ from dlio_benchmark.utils.utility import utcnow, Profile, dft_ai
 
 dlp = Profile(MODULE_DATA_LOADER)
 ITER_TIME = float(os.environ.get('DLIO_SLEEP_TIME', 1))
+logging.getLogger("SyntheticDataLoader").info(f"DLIO_SLEEP_TIME={ITER_TIME}")
 
 class SyntheticDataLoader(BaseDataLoader):
     @dlp.log_init
