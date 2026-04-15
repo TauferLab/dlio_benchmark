@@ -340,7 +340,7 @@ class PyTorchLayers:
             if samples_to_load > 0:
                 input_data = input_data[:samples_to_load]
                 target = target[:samples_to_load]
-        
+
         input_cuda = input_data.cuda("cuda:{}".format(self.gpu_id))
         target_cuda = target.cuda("cuda:{}".format(self.gpu_id))
         return input_cuda, target_cuda
@@ -348,28 +348,37 @@ class PyTorchLayers:
     @dlp.log
     def compute(self, input_data, target) -> None:
         """Execute complete training step: forward pass + backward pass.
-        
+
         Args:
             input_data: Input tensor for the model
             target: Target tensor for loss calculation
         """
         if self._train_step is None:
             dft = dft_inst.get_instance()
+            # Sync before each timing point so dft.get_time() captures real GPU
+            # execution time, not just kernel launch overhead.  The syncs sit
+            # inside the compute section where the GPU is the bottleneck and the
+            # CPU is idle anyway, so they don't reduce throughput — data-loading
+            # still overlaps with GPU work between steps.
             def train_step(step_input, step_target):
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
                 t0 = dft.get_time()
                 pred, loss = self.forward_pass(step_input, step_target)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
                 t1 = dft.get_time()
                 dft.log_event("forward_pass", "PyTorchLayers", int(t0), int(t1 - t0))
 
                 t2 = dft.get_time()
                 self.backward_pass(loss)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
                 t3 = dft.get_time()
                 dft.log_event("backward_pass", "PyTorchLayers", int(t2), int(t3 - t2))
 
                 return pred, loss
 
-
-            # CUPTI provides GPU-side tracing directly, no need for PyTorch profiler wrapper
             self._train_step = train_step
 
         self._train_step(input_data, target)
@@ -396,7 +405,7 @@ class PyTorchLayers:
 
         pred = self._model(input_data)
         loss = self._loss_function(pred, target)
-        
+
         return pred, loss
 
     @dlp.log
