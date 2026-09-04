@@ -1,26 +1,33 @@
 """
-   Copyright (c) 2025, UChicago Argonne, LLC
-   All Rights Reserved
-   
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+Copyright (c) 2025, UChicago Argonne, LLC
+All Rights Reserved
 
-       http://www.apache.org/licenses/LICENSE-2.0
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
 
 from dlio_benchmark.common.constants import MODULE_AI_FRAMEWORK
 from dlio_benchmark.utils.utility import Profile, dft_ai
+from dlio_benchmark.model.model_factory import ModelFactory
 from dlio_benchmark.framework.framework import Framework
 from dlio_benchmark.profiler.profiler_factory import ProfilerFactory
-from dlio_benchmark.common.enumerations import FrameworkType, Profiler, DatasetType, MetadataType, \
-    DataLoaderType
+from dlio_benchmark.common.enumerations import (
+    FrameworkType,
+    Profiler,
+    DatasetType,
+    MetadataType,
+)
+from dlio_benchmark.storage.storage_factory import StorageFactory
+from dlio_benchmark.common.enumerations import FrameworkType, Model, FormatType
 
 import tensorflow as tf
 from tensorflow.python.framework import errors
@@ -34,15 +41,18 @@ class TFFramework(Framework):
     __instance = None
 
     @dlp.log_init
-    def __init__(self, profiling):
+    def __init__(self, profiling, model: Model = Model.SLEEP):
         super().__init__()
         self.profiling = profiling
+        self._model = ModelFactory.create_model(FrameworkType.TENSORFLOW, model)
         # TODO: Temporary fix, need to separate the iostat profiler (needed for report gen) and the others
         if profiling:
             if self.args.profiler != Profiler.IOSTAT:
                 self.tensorboard = ProfilerFactory.get_profiler(Profiler.NONE)
             else:
                 self.tensorboard = ProfilerFactory.get_profiler(Profiler.TENSORBOARD)
+
+        # self.model = DDP(model)
         self.reader_handler = None
 
     @dlp.log
@@ -50,15 +60,16 @@ class TFFramework(Framework):
         if data_loader is None:
             data_loader = DataLoaderType.TENSORFLOW
         super().init_loader(format_type, epoch, data_loader)
+
     @dlp.log
     def get_type(self):
         return FrameworkType.TENSORFLOW
 
     @staticmethod
-    def get_instance(profiling):
-        """ Static access method. """
+    def get_instance(profiling, model: Model = Model.SLEEP):
+        """Static access method."""
         if TFFramework.__instance is None:
-            TFFramework.__instance = TFFramework(profiling)
+            TFFramework.__instance = TFFramework(profiling, model)
         return TFFramework.__instance
 
     @dlp.log
@@ -81,9 +92,11 @@ class TFFramework(Framework):
         return self.model(epoch_number, batch, computation_time)
         # tf.function(self.model)(epoch_number, step, computation_time)
 
-    
     def model(self, epoch, batch, computation_time):
-        pass
+        if self._model is None:
+            sleep(computation_time)
+        else:
+            self._model.compute(batch[0], batch[1])
 
     @dlp.log
     def get_loader(self, dataset_type=DatasetType.TRAIN):
@@ -140,4 +153,3 @@ class TFFramework(Framework):
     @dlp.log
     def isfile(self, id):
         return tf.io.gfile.exists(id) and not tf.io.gfile.isdir(id)
-
