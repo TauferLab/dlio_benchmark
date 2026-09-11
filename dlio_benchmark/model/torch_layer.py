@@ -2,15 +2,11 @@ from typing import Any, Optional, Tuple
 import torch
 import torch.nn as nn
 
-from dftracer.dynamo import dft_fn as dyn_fn
+from dftracer.python.dynamo import create_backend
 from dftracer.python.ai_common import dftracer as dft_inst
-from dlio_benchmark.utils.utility import Profile
+from dlio_benchmark.utils.utility import DFTRACER_ENABLE, Profile
 import time
 
-# Separate instances: one for graph instrumentation (no profiler wrapper to avoid nesting),
-# one for wrapping the full training step with pytorch profiler
-dyn_compile = dyn_fn("dynamo", profiler=False)
-dyn_profiler = dyn_fn("dynamo", profiler=True, profiler_activities=["cpu", "cuda"])
 dlp = Profile("PyTorchLayers")
 
 
@@ -318,11 +314,15 @@ class PyTorchLayers:
             from torch.nn.parallel import DistributedDataParallel as DDP
             self._model = DDP(self._model)
 
-        # Save raw model ref before compile - dyn.compile with profiler wraps into a function
+        # Keep the uncompiled module for optimizer construction.
         self._raw_model = self._model
-        # Dynamo compile disabled — CUPTI provides GPU-side tracing directly
-        # self._model = dyn_compile.compile(self._model, autograd=True)
-        # self._model = torch.compile(self._model, backend="inductor")
+        # DFTracer 2.x exposes its PyTorch integration as a torch.compile backend.
+        # Keep compilation opt-in: normal benchmark runs retain their existing execution path.
+        if DFTRACER_ENABLE:
+            dftracer_backend = create_backend(
+                name="PyTorchLayers", enable=True, autograd=True
+            )
+            self._model = torch.compile(self._model, backend=dftracer_backend)
 
         return self._model
     def set_optimizer(self, optimizer, *args, **kwargs):

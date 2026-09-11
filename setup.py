@@ -19,13 +19,13 @@ core_deps = [
     "omegaconf>=2.2.0",
     "pandas>=1.5.1",
     "psutil>=5.9.8",
-    "pydftracer>=2.0.2"
+    "pydftracer[dynamo]>=2.0.3"
 ]
 x86_deps = [
     f"hydra-core>={HYDRA_VERSION}",
     "nvidia-dali-cuda120>=1.34.0",
     "tensorflow>=2.13.1",
-    "torch>=2.2.0",
+    "torch>=2.5.1",
     "torchaudio",
     "torchvision",
 ]
