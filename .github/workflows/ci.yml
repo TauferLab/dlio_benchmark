@@ -2,7 +2,7 @@ name: Build and Test
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, feat/compute, feat/communication, feat/pytorch-models]
   push:
 
 jobs:
@@ -78,6 +78,10 @@ jobs:
           source ${VENV_PATH}/bin/activate
           pip install --upgrade pip
           pip install -r requirements-test.txt
+      - name: test_compute_core
+        run: |
+          source ${VENV_PATH}/bin/activate
+          pytest tests/compute_framework_test.py tests/synthetic_data_loader_test.py -v
       - name: test_ai_logging
         env:
           DFTRACER_INC_METADATA: 1

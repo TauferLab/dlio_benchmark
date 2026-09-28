@@ -1,14 +1,14 @@
 # Deep Learning I/O (DLIO) Benchmark
 ![test status](https://github.com/argonne-lcf/dlio_benchmark/actions/workflows/ci.yml/badge.svg)
 
-This README provides an abbreviated documentation of the DLIO code. Please refer to https://dlio-benchmark.readthedocs.io for full user documentation. 
+This README provides an abbreviated documentation of the DLIO code. Please refer to https://dlio-benchmark.readthedocs.io for full user documentation.
 
 ## Overview
 
-DLIO is an I/O benchmark for Deep Learning. DLIO is aimed at emulating the I/O behavior of various deep learning applications. The benchmark is delivered as an executable that can be configured for various I/O patterns. It uses a modular design to incorporate more data loaders, data formats, datasets, and configuration parameters. It emulates modern deep learning applications using Benchmark Runner, Data Generator, Format Handler, and I/O Profiler modules. 
+DLIO is an I/O benchmark for Deep Learning. DLIO is aimed at emulating the I/O behavior of various deep learning applications. The benchmark is delivered as an executable that can be configured for various I/O patterns. It uses a modular design to incorporate more data loaders, data formats, datasets, and configuration parameters. It emulates modern deep learning applications using Benchmark Runner, Data Generator, Format Handler, and I/O Profiler modules.
 
 ## Installation and running DLIO
-### Bare metal installation 
+### Bare metal installation
 
 ```bash
 git clone https://github.com/argonne-lcf/dlio_benchmark
@@ -39,9 +39,9 @@ git clone https://github.com/argonne-lcf/dlio_benchmark
 cd dlio_benchmark/
 docker build -t dlio .
 docker run -t dlio dlio_benchmark ++workload.workflow.generate_data=True
-``` 
+```
 
-You can also pull rebuilt container from docker hub (might not reflect the most recent change of the code): 
+You can also pull rebuilt container from docker hub (might not reflect the most recent change of the code):
 ```bash
 docker pull docker.io/zhenghh04/dlio:latest
 docker run -t docker.io/zhenghh04/dlio:latest dlio_benchmark ++workload.workflow.generate_data=True
@@ -72,14 +72,14 @@ For specific instructions on how to install and run the benchmark on Lassen plea
 
 ## Running the benchmark
 
-A DLIO run is split in 3 phases: 
+A DLIO run is split in 3 phases:
 - Generate synthetic data that DLIO will use
 - Run the benchmark using the previously generated data
 - Post-process the results to generate a report
 
-The configurations of a workload can be specified through a yaml file. Examples of yaml files can be found in [dlio_benchmark/configs/workload/](./dlio_benchmark/configs/workload). 
+The configurations of a workload can be specified through a yaml file. Examples of yaml files can be found in [dlio_benchmark/configs/workload/](./dlio_benchmark/configs/workload).
 
-One can specify the workload through the ```workload=``` option on the command line. Specific configuration fields can then be overridden following the ```hydra``` framework convention (e.g. ```++workload.framework=tensorflow```). 
+One can specify the workload through the ```workload=``` option on the command line. Specific configuration fields can then be overridden following the ```hydra``` framework convention (e.g. ```++workload.framework=tensorflow```).
 
 First, generate the data
   ```bash
@@ -101,17 +101,17 @@ Finally, run the benchmark with Tracer
   ```
 
 All the outputs will be stored in ```hydra_log/unet3d/$DATE-$TIME``` folder. To post process the data, one can do
-```bash 
+```bash
 dlio_postprocessor --output-folder hydra_log/unet3d/$DATE-$TIME
 ```
-This will generate ```DLIO_$model_report.txt``` in the output folder. 
+This will generate ```DLIO_$model_report.txt``` in the output folder.
 
-## Workload YAML configuration file 
-Workload characteristics are specified by a YAML configuration file. Below is an example of a YAML file for the UNet3D workload which is used for 3D image segmentation. 
+## Workload YAML configuration file
+Workload characteristics are specified by a YAML configuration file. Below is an example of a YAML file for the UNet3D workload which is used for 3D image segmentation.
 
 ```
 # contents of unet3d.yaml
-model: 
+model:
   name: unet3d
   model_size: 499153191
 
@@ -122,7 +122,7 @@ workflow:
   train: True
   checkpoint: True
 
-dataset: 
+dataset:
   data_folder: data/unet3d/
   format: npz
   num_files_train: 168
@@ -130,8 +130,8 @@ dataset:
   record_length_bytes: 146600628
   record_length_bytes_stdev: 68341808
   record_length_bytes_resize: 2097152
-  
-reader: 
+
+reader:
   data_loader: pytorch
   batch_size: 4
   read_threads: 4
@@ -150,11 +150,11 @@ checkpoint:
 
 The full list of configurations can be found in: https://argonne-lcf.github.io/dlio_benchmark/config.html
 
-The YAML file is loaded through hydra (https://hydra.cc/). The default setting are overridden by the configurations loaded from the YAML file. One can override the configuration through command line (https://hydra.cc/docs/advanced/override_grammar/basic/). 
+The YAML file is loaded through hydra (https://hydra.cc/). The default setting are overridden by the configurations loaded from the YAML file. One can override the configuration through command line (https://hydra.cc/docs/advanced/override_grammar/basic/).
 
 ## Current Limitations and Future Work
 
-* DLIO currently assumes the samples to always be 2D images, even though one can set the size of each sample through ```--record_length```. We expect the shape of the sample to have minimal impact to the I/O itself. This yet to be validated for case by case perspective. We plan to add option to allow specifying the shape of the sample. 
+* DLIO currently assumes the samples to always be 2D images, even though one can set the size of each sample through ```--record_length```. We expect the shape of the sample to have minimal impact to the I/O itself. This yet to be validated for case by case perspective. We plan to add option to allow specifying the shape of the sample.
 
 * We assume the data/label pairs are stored in the same file. Storing data and labels in separate files will be supported in future.
 
@@ -162,24 +162,34 @@ The YAML file is loaded through hydra (https://hydra.cc/). The default setting a
 
 * Storage backend support: we support local filesystem, AWS S3, and AIStore as storage backends. Other storage backends can be extended.
 
-* Data Loader support: we support reading datasets using TensorFlow tf.data data loader, PyTorch DataLoader, and a set of custom data readers implemented in ./reader. For TensorFlow tf.data data loader, PyTorch DataLoader  
-  - We have complete support for tfrecord format in TensorFlow data loader. 
-  - For npz, jpg, jpeg, hdf5, we currently only support one sample per file case. In other words, each sample is stored in an independent file. Multiple samples per file case will be supported in future. 
+* Native compute: Set `++workload.train.compute=true` with a supported `workload.model.name` to train a native framework model on each loaded batch. The default `compute=false` keeps the existing simulated `train.computation_time` behavior. Architecture registrations arrive in the later model PRs; this first PR establishes the framework training path and its tests with tiny native models.
 
-## How to contribute 
+* Data Loader support: we support reading datasets using TensorFlow tf.data data loader, PyTorch DataLoader, Load Memory DataLoader, and a set of custom data readers implemented in ./reader.
+  - **PyTorch DataLoader**: Standard PyTorch data loading with multi-threaded workers and prefetching
+  - **TensorFlow DataLoader**: TensorFlow tf.data pipeline for efficient data loading
+  - **Load Memory DataLoader** (`load_mem`): Preloads entire dataset into memory using PyTorch DataLoader, then serves batches from RAM. Useful for:
+    - Benchmarking pure compute performance by eliminating I/O overhead
+    - Small datasets that fit in memory
+    - Repeated epoch training where data can be cached
+    - Usage: Set `++workload.reader.data_loader=load_mem` in your configuration
+  - **Synthetic DataLoader** (`synthetic`): Generates zero-filled synthetic data without any I/O. Useful for testing framework overhead
+  - We have complete support for tfrecord format in TensorFlow data loader.
+  - For npz, jpg, jpeg, hdf5, we currently only support one sample per file case. In other words, each sample is stored in an independent file. Multiple samples per file case will be supported in future.
+
+## How to contribute
 We welcome contributions from the community to the benchmark code. Specifically, we welcome contribution in the following aspects:
-General new features needed including: 
+General new features needed including:
 
-* support for new workloads: if you think that your workload(s) would be interested to the public, and would like to provide the yaml file to be included in the repo, please submit an issue.  
+* support for new workloads: if you think that your workload(s) would be interested to the public, and would like to provide the yaml file to be included in the repo, please submit an issue.
 * support for new data loaders, such as DALI loader, MxNet loader, etc
 * support for new frameworks, such as MxNet
 * support for novel file systems or storage, such as AWS S3, AIStore, etc.
-* support for loading new data formats. 
+* support for loading new data formats.
 
 If you would like to contribute, please submit an issue to https://github.com/argonne-lcf/dlio_benchmark/issues, and contact ALCF DLIO team, Huihuo Zheng at huihuo.zheng@anl.gov
 
 ## Citation and Reference
-The original CCGrid'21 paper describes the design and implementation of DLIO code. Please cite this paper if you use DLIO for your research. 
+The original CCGrid'21 paper describes the design and implementation of DLIO code. Please cite this paper if you use DLIO for your research.
 
 ```
 @article{devarajan2021dlio,
@@ -194,7 +204,7 @@ The original CCGrid'21 paper describes the design and implementation of DLIO cod
 }
 ```
 
-We also encourage people to take a look at a relevant work from MLPerf Storage working group. 
+We also encourage people to take a look at a relevant work from MLPerf Storage working group.
 ```
 @article{balmau2022mlperfstorage,
   title={Characterizing I/O in Machine Learning with MLPerf Storage},

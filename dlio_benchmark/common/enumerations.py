@@ -111,6 +111,27 @@ class FrameworkType(Enum):
     def __str__(self):
         return self.value
 
+class Model(Enum):
+    """
+    Different Model Architectures
+    """
+    RESNET = 'resnet50'
+    UNET= 'unet3d'
+    BERT = 'bert'
+    SLEEP = 'sleep'
+    DEFAULT = 'default'
+
+    def __str__(self):
+        return self.value
+
+class Loss(Enum):
+    """
+    Loss functions for models
+    """
+    MSE = 'mse'
+    CE = 'cross_entropy'
+    NONE = 'none'
+
 class ComputationType(Enum):
     """
     Different Computation Type for training loop.
@@ -134,7 +155,7 @@ class FormatType(Enum):
     INDEXED_BINARY = 'indexed_binary'
     MMAP_INDEXED_BINARY = 'mmap_indexed_binary'
     SYNTHETIC = 'synthetic'
-    
+
     def __str__(self):
         return self.value
 
@@ -149,7 +170,7 @@ class FormatType(Enum):
         elif FormatType.NPZ.value == value:
             return FormatType.NPZ
         elif FormatType.NPY.value == value:
-            return FormatType.NPY            
+            return FormatType.NPY
         elif FormatType.HDF5_OPT.value == value:
             return FormatType.HDF5_OPT
         elif FormatType.JPEG.value == value:
@@ -174,7 +195,8 @@ class DataLoaderType(Enum):
     CUSTOM='custom'
     NONE='none'
     SYNTHETIC='synthetic'
-    
+    LOAD_MEM='load_mem'
+
     def __str__(self):
         return self.value
 
@@ -225,9 +247,9 @@ class Shuffle(Enum):
 
 class ReadType(Enum):
     """
-    Type of read to be performed in the benchmark. 
+    Type of read to be performed in the benchmark.
     - On Demand: loading data in a batch-by-batch fashion
-    - In Memory: loading data all at once in the beginning. 
+    - In Memory: loading data all at once in the beginning.
     """
     IN_MEMORY = 'memory'
     ON_DEMAND = 'on_demand'
@@ -240,7 +262,7 @@ class FileAccess(Enum):
     File access mode.
     - Multi = save dataset into multiple files
     - Shared = save everything in a single file
-    - Collective = specific for the shared case, when we want to do collective I/O. Typically used for a huge file with small objects. 
+    - Collective = specific for the shared case, when we want to do collective I/O. Typically used for a huge file with small objects.
       One thread T reads from disk and the other threads read from T's memory, which is used as a cache.
     """
     MULTI = 'multi'
@@ -265,7 +287,7 @@ class FileAccess(Enum):
             return FileAccess.SHARED
         elif FileAccess.COLLECTIVE.value == value:
             return FileAccess.COLLECTIVE
-                   
+
 class Compression(Enum):
     """
     Different Compression Libraries.
@@ -287,7 +309,7 @@ class MPIState(Enum):
     UNINITIALIZED = 0
     MPI_INITIALIZED = 1
     CHILD_INITIALIZED = 2
-   
+
     @staticmethod
     def get_enum(value):
         if MPIState.UNINITIALIZED.value == value:

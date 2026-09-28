@@ -23,7 +23,7 @@ import logging
 from typing import Any, Dict, List, ClassVar, Union
 
 from dlio_benchmark.common.constants import MODULE_CONFIG
-from dlio_benchmark.common.enumerations import StorageType, FormatType, Shuffle, ReadType, FileAccess, Compression, \
+from dlio_benchmark.common.enumerations import Model, StorageType, FormatType, Shuffle, ReadType, FileAccess, Compression, \
     FrameworkType, \
     DataLoaderType, Profiler, DataLoaderSampler, CheckpointLocationType, CheckpointMechanismType, CheckpointModeType
 from dlio_benchmark.utils.utility import DLIOMPI, get_trace_name, utcnow
@@ -42,7 +42,7 @@ class ConfigArguments:
 
     # command line argument
     # Framework to use
-    model: str = "default"
+    model: Model = Model.DEFAULT
     framework: FrameworkType = FrameworkType.TENSORFLOW
     # Dataset format, such as PNG, JPEG
     format: FormatType = FormatType.TFRECORD
@@ -87,6 +87,7 @@ class ConfigArguments:
     read_threads: int = 1
     dont_use_mmap: bool = False
     computation_threads: int = 1
+    compute: bool = False
     computation_time: ClassVar[Dict[str, Any]] = {}
     preprocess_time: ClassVar[Dict[str, Any]] = {}
     prefetch_size: int = 2
@@ -321,6 +322,11 @@ class ConfigArguments:
                 raise Exception("To perform subset Checkpointing, please set a target data parallelism: workload.parallelism.data.")
             elif self.data_parallelism * self.tensor_parallelism * self.pipeline_parallelism < self.comm_size:
                 raise Exception(f"Comm size: {self.comm_size} is larger than 3D parallelism size: {self.data_parallelism * self.tensor_parallelism * self.pipeline_parallelism}")
+
+        if self.do_train and self.model in (Model.DEFAULT, Model.SLEEP) and not self.computation_time:
+            # TODO: Is this a good check?
+            raise Exception(f"workload.model.name is not set and workload.train.computation_time is not set. Please set one of them.")
+
         if self.checkpoint_mode == CheckpointModeType.DEFAULT:
             if self.comm_size % (self.pipeline_parallelism * self.tensor_parallelism) != 0:
                 raise Exception(f"Number of processes {self.comm_size} is not a multiple of model parallelism size: {self.pipeline_parallelism * self.tensor_parallelism}")
@@ -330,7 +336,7 @@ class ConfigArguments:
         if self.ksm_present and self.checkpoint_randomize_tensor:
             raise Exception(f"checkpoint.ksm is {self.ksm_present} which requires checkpoint.randomize_tensor to be False")
 
-        # HDF5 specific checks        
+        # HDF5 specific checks
         if len(self.record_dims) > 0:
             if self.record_dims[0] % self.num_dset_per_record != 0:
                 raise ValueError("hdf5.num_dset_per_record should be divisible by record_dims[0]")
@@ -351,7 +357,7 @@ class ConfigArguments:
         if self.storage_type == StorageType.AISTORE and self.framework == FrameworkType.PYTORCH:
             if self.format not in (FormatType.NPZ, FormatType.NPY):
                 raise Exception(f"For AIStore using PyTorch framework, only NPZ or NPY formats are supported. Got format {self.format}")
-            
+
             # Validate that aistore SDK is available (check module-level flag
             # so mock-based tests can patch AISTORE_AVAILABLE without the real SDK)
             from dlio_benchmark.storage import aistore_storage as _ais_mod
@@ -360,7 +366,7 @@ class ConfigArguments:
                     "The aistore package is required for AIStore storage but is not installed. "
                     "Install it with: pip install aistore"
                 )
-            
+
             # AIStore uses S3 generators/readers, so validate those exist
             if self.format == FormatType.NPY:
                 try:
@@ -489,8 +495,11 @@ class ConfigArguments:
         if self.data_loader_sampler is None and self.data_loader_classname is None:
             if self.data_loader == DataLoaderType.TENSORFLOW:
                 self.data_loader_sampler = DataLoaderSampler.ITERATIVE
-            elif self.data_loader in [DataLoaderType.PYTORCH, DataLoaderType.DALI]:
+            elif self.data_loader in [DataLoaderType.PYTORCH, DataLoaderType.DALI, DataLoaderType.LOAD_MEM]:
                 self.data_loader_sampler = DataLoaderSampler.INDEX
+            else:
+                # TODOMEET: Check with Hari on this
+                self.data_loader_sampler = DataLoaderSampler.ITERATIVE
         if self.data_loader_classname is not None:
             from dlio_benchmark.data_loader.base_data_loader import BaseDataLoader
             classname = self.data_loader_classname.split(".")[-1]
@@ -539,7 +548,7 @@ class ConfigArguments:
 
         if self.format in [FormatType.JPEG, FormatType.PNG]:
             if self.record_element_type != "uint8":
-                # @ray: ensure compatibility with PIL fromarray (https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.fromarray)        
+                # @ray: ensure compatibility with PIL fromarray (https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.fromarray)
                 # force uint8 on image dataset
                 self.logger.warning(f"Image format {self.format} requires record_element_type to be np.uint8, but given {self.record_element_type}. Re-setting to np.uint8.")
                 self.record_element_type = "uint8"
@@ -557,7 +566,7 @@ class ConfigArguments:
     @dlp.log
     def build_sample_map_iter(self, file_list, total_samples, epoch_number):
         self.logger.debug(f"ranks {self.comm_size} threads {self.read_threads} tensors")
-        
+
         num_files = len(file_list)
         samples_sum = 0
         process_thread_file_map = {}
@@ -565,7 +574,7 @@ class ConfigArguments:
             num_threads = 1
             if self.read_threads > 0 and self.data_loader is not DataLoaderType.DALI:
                 num_threads = self.read_threads
-            samples_per_proc = int(math.ceil(total_samples/self.comm_size)) 
+            samples_per_proc = int(math.ceil(total_samples/self.comm_size))
             self.samples_per_thread = samples_per_proc // num_threads
             start_sample_index = samples_per_proc * self.my_rank
             end_sample_index = samples_per_proc * (self.my_rank + 1) - 1
@@ -605,7 +614,7 @@ class ConfigArguments:
         samples_sum = 0
         if num_files > 0:
             end_sample = total_samples - 1
-            samples_per_proc = int(math.ceil(total_samples/self.comm_size)) 
+            samples_per_proc = int(math.ceil(total_samples/self.comm_size))
             start_sample = self.my_rank * samples_per_proc
             end_sample = (self.my_rank + 1) * samples_per_proc - 1
             if end_sample > total_samples - 1:
@@ -638,7 +647,7 @@ class ConfigArguments:
                     np.random.seed(self.seed + epoch_number)
                 else:
                     np.random.seed(self.seed)
-                np.random.shuffle(self.file_list_train) 
+                np.random.shuffle(self.file_list_train)
                 np.random.shuffle(self.file_list_eval)
         if self.data_loader_sampler == DataLoaderSampler.ITERATIVE:
             self.train_file_map, local_train_sample_sum = self.build_sample_map_iter(self.file_list_train, self.total_samples_train,
@@ -650,12 +659,12 @@ class ConfigArguments:
             self.val_global_index_map, local_eval_sample_sum = self.get_global_map_index(self.file_list_eval, self.total_samples_eval,
                                                              epoch_number)
         global_train_sample_sum = DLIOMPI.get_instance().reduce(local_train_sample_sum)
-        global_eval_sample_sum = DLIOMPI.get_instance().reduce(local_eval_sample_sum)        
+        global_eval_sample_sum = DLIOMPI.get_instance().reduce(local_eval_sample_sum)
         if self.my_rank == 0:
             self.logger.info(f"{utcnow()} Total number of samples: train {global_train_sample_sum}, eval {global_eval_sample_sum}")
             if self.train_sample_index_sum != global_train_sample_sum:
                 raise Exception(f"Sharding of train samples are missing samples got {global_train_sample_sum} but expected {self.train_sample_index_sum}")
-            
+
             if self.eval_sample_index_sum != global_eval_sample_sum:
                 raise Exception(f"Sharding of eval samples are missing samples got {global_eval_sample_sum} but expected {self.eval_sample_index_sum}")
 
@@ -664,7 +673,7 @@ def GetConfig(args, key):
     value = None
     if len(keys) > 0 and keys[0] == "framework":
         value = args.framework
-    
+
     if len(keys) > 1 and keys[0] == "storage":
         if keys[1] == "storage_type":
             value = args.storage_type
@@ -675,7 +684,7 @@ def GetConfig(args, key):
                 option_key = keys[2]
                 if option_key in ["access_key_id", "secret_access_key", "endpoint_url", "region", "s3_force_path_style", "s3_max_attempts"]:
                     value = config["storage"].get("storage_options", {}).get(option_key)
-    
+
     if len(keys) > 1 and keys[0] == "dataset":
         if keys[1] == "record_length_bytes":
             value = args.record_length
@@ -770,6 +779,8 @@ def GetConfig(args, key):
             value = args.computation_time.get("stdev", None)
         elif keys[1] == "seed":
             value = args.seed
+        elif keys[1] == "compute":
+            value = args.compute
 
     if len(keys) > 1 and keys[0] == "evaluation":
         if keys[1] == "eval_time":
@@ -806,7 +817,7 @@ def GetConfig(args, key):
             value = args.num_checkpoints_read
         elif keys[1] == "checkpoint_rank_sync":
             value = args.checkpoint_rank_sync
-        elif keys[1] == "recovery_rank_shift":  
+        elif keys[1] == "recovery_rank_shift":
             value = args.checkpoint_recovery_rank_shift
 
     if len(keys) > 1 and keys[0] == "model":
@@ -848,7 +859,7 @@ def GetConfig(args, key):
                 value = args.num_attention_heads
             elif keys[2] == "num_kv_heads":
                 value = args.num_kv_heads
-            
+
     if len(keys) > 1 and keys[0] == "output":
         if keys[1] == "folder":
             value = args.output_folder
@@ -1040,6 +1051,8 @@ def LoadConfig(args, config):
             args.computation_time["stdev"] = config['train']['computation_time_stdev']
         if 'seed' in config['train']:
             args.seed = config['train']['seed']
+        if 'compute' in config['train']:
+            args.compute = config['train']['compute']
 
     if 'evaluation' in config:
         args.eval_time = {}
@@ -1054,7 +1067,7 @@ def LoadConfig(args, config):
             else:
                 args.eval_time = config['evaluation']['eval_time']
             args.eval_time = eval_time if eval_time is not None else {}
-                
+
         if 'eval_time_stdev' in config['evaluation']:
             args.eval_time["stdev"] = config['evaluation']['eval_time_stdev']
         if 'eval_after_epoch' in config['evaluation']:
@@ -1105,7 +1118,15 @@ def LoadConfig(args, config):
 
     if 'model' in config:
         if 'name' in config['model']:
-            args.model = config['model']['name']
+            try:
+                args.model =  Model(config['model']['name'])
+            except ValueError as error:
+                if args.compute:
+                    raise ValueError(
+                        f"Unsupported workload.model.name: {config['model']['name']}"
+                    ) from error
+                # Legacy model names still select simulated compute.
+                args.model = Model.SLEEP
         if 'type' in config['model']:
             args.model_type = config['model']['type']
         if 'model_size_bytes' in config['model']:
@@ -1142,7 +1163,7 @@ def LoadConfig(args, config):
                 args.num_attention_heads = config['model']['transformer']['num_attention_heads']
             if 'num_kv_heads' in config['model']['transformer']:
                 args.num_kv_heads = config['model']['transformer']['num_kv_heads']
-            
+
     if 'output' in config:
         if 'folder' in config['output']:
             args.output_folder = config['output']['folder']
@@ -1173,7 +1194,7 @@ def LoadConfig(args, config):
             args.do_checkpoint = config['workflow']['checkpoint']
         if 'profiling' in config['workflow']:
             args.do_profiling = config['workflow']['profiling']
-    
+
     if not args.do_train:
         if args.generate_data and (not args.do_checkpoint):
             args.generate_only = True
