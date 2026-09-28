@@ -23,6 +23,7 @@ from typing import Any, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as functional
 
 from dlio_benchmark.common.constants import MODULE_AI_FRAMEWORK
 from dlio_benchmark.common.enumerations import (
@@ -163,9 +164,20 @@ class TorchFramework(Framework):
             raise
 
     def _configure_training(self, model_type):
-        """Defaults for native classifiers; architecture PRs may specialize."""
         self._loss_function = torch.nn.CrossEntropyLoss()
-        self._optimizer = torch.optim.SGD(self._training_model.parameters(), lr=0.1)
+        if model_type == Model.RESNET:
+            self._optimizer = torch.optim.SGD(
+                self._training_model.parameters(),
+                lr=1,
+                momentum=1,
+                weight_decay=1,
+            )
+        elif model_type == Model.UNET:
+            self._optimizer = torch.optim.Adam(
+                self._training_model.parameters(), lr=1e-4
+            )
+        else:
+            raise ValueError(f"Unsupported PyTorch model: {model_type}")
 
     @staticmethod
     def _configure_tracing(model):
@@ -270,14 +282,126 @@ class TorchFramework(Framework):
             return torch.utils.dlpack.from_dlpack(value)
         return torch.as_tensor(value)
 
-    def _prepare_batch(self, batch):
-        """Convert a labeled batch without assuming an architecture or layout."""
+    def _prepare_resnet_batch(self, batch):
         inputs, target = self._split_batch(batch)
+        inputs = self._as_tensor(inputs)
+
+        if inputs.ndim == 2:
+            inputs = inputs.unsqueeze(1).unsqueeze(2).repeat(1, 3, 1, 1)
+        elif inputs.ndim == 3:
+            inputs = inputs.unsqueeze(1).repeat(1, 3, 1, 1)
+        elif inputs.ndim == 4:
+            if inputs.shape[1] == 1:
+                inputs = inputs.repeat(1, 3, 1, 1)
+            elif inputs.shape[1] != 3 and inputs.shape[-1] in (1, 3):
+                inputs = inputs.permute(0, 3, 1, 2)
+                if inputs.shape[1] == 1:
+                    inputs = inputs.repeat(1, 3, 1, 1)
+            elif inputs.shape[1] != 3:
+                raise ValueError(
+                    "ResNet input must be BHW, BCHW, or BHWC with 1/3 channels; "
+                    f"got {tuple(inputs.shape)}"
+                )
+        else:
+            raise ValueError(
+                f"ResNet input must have 2-4 dimensions; got {tuple(inputs.shape)}"
+            )
+
+        if target is not None:
+            target = self._as_tensor(target)
+        inputs = inputs.to(self.device, dtype=torch.float32, non_blocking=True)
+
         if target is None:
-            raise ValueError("Native model training requires a target")
-        inputs = self._as_tensor(inputs).to(self.device, dtype=torch.float32)
-        target = self._as_tensor(target).to(self.device)
-        return inputs, target.long()
+            target = torch.zeros(
+                inputs.shape[0], dtype=torch.long, device=self.device
+            )
+        else:
+            target = target.to(self.device, non_blocking=True)
+            if target.ndim == 2 and target.shape[1] == 1:
+                target = target[:, 0]
+            if target.ndim == 1:
+                target = target.long()
+            else:
+                target = target.float()
+        return inputs, target
+
+    def _prepare_unet_batch(self, batch):
+        inputs, target = self._split_batch(batch)
+        inputs = self._as_tensor(inputs)
+
+        if inputs.ndim == 3:
+            inputs = inputs.unsqueeze(1).unsqueeze(2)
+        elif inputs.ndim == 4:
+            inputs = inputs.unsqueeze(1)
+        elif inputs.ndim == 5:
+            if inputs.shape[1] != 1 and inputs.shape[-1] == 1:
+                inputs = inputs.permute(0, 4, 1, 2, 3)
+            elif inputs.shape[1] != 1:
+                raise ValueError(
+                    "UNet3D input must be BDHW, BCDHW, or BDHWC with one "
+                    f"channel; got {tuple(inputs.shape)}"
+                )
+        else:
+            raise ValueError(
+                f"UNet3D input must have 3-5 dimensions; got {tuple(inputs.shape)}"
+            )
+
+        if target is not None:
+            target = self._as_tensor(target)
+        inputs = inputs.to(self.device, dtype=torch.float32, non_blocking=True)
+
+        # DALI sample labels are classification IDs, not segmentation masks.
+        # For those scalar labels, synthesize the same valid zero mask used
+        # when a loader supplies input data only.
+        if target is None or target.ndim <= 2:
+            target = torch.zeros(
+                (inputs.shape[0], *inputs.shape[2:]),
+                dtype=torch.long,
+                device=self.device,
+            )
+        else:
+            target = target.to(self.device, non_blocking=True)
+            if target.ndim == 3:
+                target = target.unsqueeze(1)
+            elif target.ndim == 5:
+                if target.shape[1] == 1:
+                    target = target[:, 0]
+                elif target.shape[1] == 3:
+                    target = target.argmax(dim=1)
+                elif target.shape[-1] == 1:
+                    target = target[..., 0]
+                elif target.shape[-1] == 3:
+                    target = target.argmax(dim=-1)
+                else:
+                    raise ValueError(
+                        "UNet3D target must have one label per voxel or "
+                        f"three class channels; got {tuple(target.shape)}"
+                    )
+            elif target.ndim != 4:
+                raise ValueError(
+                    "UNet3D target must be BHW, BDHW, BCDHW, or BDHWC; "
+                    f"got {tuple(target.shape)}"
+                )
+            target = target.long()
+        return inputs, target
+
+    def _prepare_batch(self, batch):
+        if self.model_type == Model.RESNET:
+            return self._prepare_resnet_batch(batch)
+        if self.model_type == Model.UNET:
+            return self._prepare_unet_batch(batch)
+        raise ValueError(f"Unsupported PyTorch model: {self.model_type}")
+
+    @staticmethod
+    def _align_unet_target(prediction, target):
+        if tuple(target.shape[1:]) == tuple(prediction.shape[2:]):
+            return target
+        target = functional.interpolate(
+            target.unsqueeze(1).float(),
+            size=prediction.shape[2:],
+            mode="nearest",
+        )
+        return target[:, 0].long()
 
     def _train_batch(self, batch):
         inputs, target = self._prepare_batch(batch)
@@ -292,6 +416,8 @@ class TorchFramework(Framework):
             started = trace.get_time()
 
         prediction = self._model(inputs)
+        if getattr(self, "model_type", None) == Model.UNET:
+            target = self._align_unet_target(prediction, target)
         loss = self._loss_function(prediction, target)
 
         if DFTRACER_ENABLE:

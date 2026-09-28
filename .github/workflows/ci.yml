@@ -88,6 +88,12 @@ jobs:
         run: |
           source ${VENV_PATH}/bin/activate
           pytest tests/config_communication_test.py tests/communication_test.py -v
+      - name: test_pytorch_models
+        run: |
+          source ${VENV_PATH}/bin/activate
+          pytest tests/pytorch_models_test.py tests/pytorch_framework_test.py tests/unit_model_factory.py tests/native_framework_batch_test.py -v
+          pytest tests/pytorch_benchmark_test.py -k compute -v
+          TORCH_DISTRIBUTED_BACKEND=gloo mpirun -np 2 pytest tests/pytorch_benchmark_test.py -k comms -v
       - name: test_ai_logging
         env:
           DFTRACER_INC_METADATA: 1

@@ -23,6 +23,14 @@ class ModelFactory:
     @staticmethod
     def create_pytorch_model(model_type: Model):
         """Return a native PyTorch model, importing only the PyTorch backend."""
+        if model_type == Model.RESNET:
+            from dlio_benchmark.model.pytorch.resnet import ResNet50
+
+            return ResNet50()
+        if model_type == Model.UNET:
+            from dlio_benchmark.model.pytorch.unet3d import UNet3D
+
+            return UNet3D()
         if model_type in (Model.SLEEP, Model.DEFAULT):
             return None
         raise ValueError(f"Unsupported model type: {model_type}")

@@ -158,6 +158,16 @@ def test_indexed_binary_generator_lookup_does_not_reference_loader_enum():
 def test_load_mem_matches_actual_torch_loader_on_cpu(monkeypatch):
     torch = pytest.importorskip("torch")
     args = _args()
+    from dlio_benchmark.utils.utility import DLIOLogger
+
+    # With read_threads=0, worker_init unpickles ConfigArguments in this same
+    # pytest process, replacing the parent MPI/config/logger singletons with
+    # child state. Restore the parent instances at test teardown.
+    monkeypatch.setattr(DLIOMPI, "_DLIOMPI__instance", DLIOMPI.get_instance())
+    monkeypatch.setattr(ConfigArguments, "_ConfigArguments__instance", args)
+    monkeypatch.setattr(
+        DLIOLogger, "_DLIOLogger__instance", DLIOLogger._DLIOLogger__instance
+    )
     args.total_samples_train = 8
     args.batch_size = 4
     args.resized_image = np.arange(15, dtype=np.uint8).reshape(3, 5)

@@ -362,6 +362,15 @@ def test_tracing_wraps_ddp_training_model(monkeypatch):
         return SimpleNamespace(module=model)
 
     monkeypatch.setattr(TorchFramework, "_configure_tracing", staticmethod(trace_model))
+
+    # This test exercises DDP/tracing order with a tiny stand-in for a future
+    # architecture; use an equally small training hook now that production
+    # optimizer selection rejects unregistered models.
+    def configure_training(self, model_type):
+        self._loss_function = torch.nn.CrossEntropyLoss()
+        self._optimizer = torch.optim.SGD(self._training_model.parameters(), lr=0.1)
+
+    monkeypatch.setattr(TorchFramework, "_configure_training", configure_training)
     framework = TorchFramework(False, Model.BERT, communication=True)
     assert isinstance(framework._training_model, FakeDDP)
     assert traced == [framework._training_model]
