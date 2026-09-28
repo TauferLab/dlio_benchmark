@@ -25,13 +25,23 @@ cd dlio_benchmark/
 pip install .[aistore]
 ```
 
-### Bare metal installation with profiler
+### PyTorch CPU or CUDA installation
+
+The base installation includes `pydftracer[dynamo]`, which requires PyTorch. To select a CPU-only PyTorch wheel, install it before DLIO:
 
 ```bash
-git clone https://github.com/argonne-lcf/dlio_benchmark
-cd dlio_benchmark/
-pip install .[pydftracer]
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install .
 ```
+
+For an explicit CUDA installation, use the `cuda` extra. First install a compatible CUDA PyTorch wheel using the [PyTorch installer](https://pytorch.org/get-started/locally/) (CUDA 12.4 example below), then install DLIO with the `cuda` extra. This extra also installs NVIDIA DALI:
+
+```bash
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
+python -m pip install '.[cuda]'
+```
+
+PyTorch wheel indexes are selected by the `pip` command, not by a package extra. Choose the index supported by your Python version and NVIDIA driver. The standard `pip install .` and `pip install -r requirements.txt` commands do not request DALI or a CUDA wheel index. Because `pydftracer[dynamo]` depends on PyTorch, preinstall the CPU wheel as shown above when you need to exclude transitive CUDA packages.
 
 ## Container
 ```bash
@@ -171,8 +181,8 @@ The YAML file is loaded through hydra (https://hydra.cc/). The default setting a
     - Benchmarking pure compute performance by eliminating I/O overhead
     - Small datasets that fit in memory
     - Repeated epoch training where data can be cached
-    - Usage: Set `++workload.reader.data_loader=load_mem` in your configuration. Use `++workload.reader.iter_time=0` to remove the default one-second delay between cached batches.
-  - **Synthetic DataLoader** (`synthetic`): Generates zero-filled synthetic data without any I/O. Useful for testing framework overhead
+    - Usage: Set `++workload.reader.data_loader=load_mem` in your configuration. Use `++workload.reader.iter_time=0` to remove the default one-second delay before each `load_mem` or `synthetic` batch.
+  - **Synthetic DataLoader** (`synthetic`): Generates zero-filled synthetic data without any I/O. Useful for testing framework overhead. Each batch waits for `reader.iter_time` seconds before being returned.
   - We have complete support for tfrecord format in TensorFlow data loader. 
   - For npz, jpg, jpeg, hdf5, we currently only support one sample per file case. In other words, each sample is stored in an independent file. Multiple samples per file case will be supported in future. 
 

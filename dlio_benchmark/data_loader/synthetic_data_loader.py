@@ -16,6 +16,7 @@
 """
 
 import math
+import time
 import torch
 
 from dlio_benchmark.common.constants import MODULE_DATA_LOADER
@@ -30,6 +31,7 @@ class SyntheticDataLoader(BaseDataLoader):
     @dlp.log_init
     def __init__(self, format_type, dataset_type, epoch):
         super().__init__(format_type, dataset_type, epoch, DataLoaderType.SYNTHETIC)
+        self.iter_time = self._args.iter_time
         shape = self._args.resized_image.shape
         # Calculate local samples for this rank
         total_samples = self.num_samples
@@ -75,6 +77,7 @@ class SyntheticDataLoader(BaseDataLoader):
             dft_ai.dataloader.fetch.stop()
             dft_ai.update(step=step)
             step += 1
+            time.sleep(self.iter_time)
             yield self.getitem()
             dft_ai.dataloader.fetch.start()
 

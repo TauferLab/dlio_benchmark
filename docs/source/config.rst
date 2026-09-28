@@ -367,7 +367,7 @@ reader
      - select the data loader to use [tensorflow|pytorch|synthetic|load_mem]. The load_mem loader caches batches from the PyTorch loader in RAM.
    * - iter_time
      - 1.0
-     - Seconds of delay before each cached batch from the ``load_mem`` loader; set to ``0`` to disable the delay. For example, ``++workload.reader.iter_time=0.1``.
+     - Seconds of delay before each batch from the ``load_mem`` or ``synthetic`` loader; set to ``0`` to disable the delay. For example, ``++workload.reader.iter_time=0.1``.
    * - batch_size
      - 1 
      - batch size for training I/O and native model computation

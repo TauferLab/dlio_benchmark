@@ -128,14 +128,19 @@ def test_cpu_synthetic_loader_yields_local_batches(monkeypatch):
     args.total_samples_train = 8
     args.batch_size = 4
     args.resized_image = np.zeros((3, 5), dtype=np.uint8)
+    monkeypatch.setattr(args, "iter_time", 0.125)
+    monkeypatch.setenv("DLIO_SLEEP_TIME", "9")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     from dlio_benchmark.common.enumerations import DatasetType, FormatType
-    from dlio_benchmark.data_loader.synthetic_data_loader import SyntheticDataLoader
+    from dlio_benchmark.data_loader import synthetic_data_loader as module
 
-    loader = SyntheticDataLoader(FormatType.SYNTHETIC, DatasetType.TRAIN, 0)
+    sleep_calls = []
+    monkeypatch.setattr(module.time, "sleep", sleep_calls.append)
+    loader = module.SyntheticDataLoader(FormatType.SYNTHETIC, DatasetType.TRAIN, 0)
     assert tuple(loader.getitem().shape) == (4, 3, 5)
     assert not loader.getitem().is_pinned()
     assert len(list(loader.next())) == 2
+    assert sleep_calls == [0.125, 0.125]
 
 
 def test_indexed_binary_generator_lookup_does_not_reference_loader_enum():
