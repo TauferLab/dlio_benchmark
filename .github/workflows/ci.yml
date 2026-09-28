@@ -2,7 +2,7 @@ name: Build and Test
 
 on:
   pull_request:
-    branches: [main, dev, feat/compute, feat/communication, feat/pytorch-models]
+    branches: [main, dev, feat/compute, feat/communication, feat/pytorch-models, feat/tensorflow-models]
   push:
 
 jobs:
@@ -94,6 +94,14 @@ jobs:
           pytest tests/pytorch_models_test.py tests/pytorch_framework_test.py tests/unit_model_factory.py tests/native_framework_batch_test.py -v
           pytest tests/pytorch_benchmark_test.py -k compute -v
           TORCH_DISTRIBUTED_BACKEND=gloo mpirun -np 2 pytest tests/pytorch_benchmark_test.py -k comms -v
+      - name: test_tensorflow_models
+        env:
+          DFTRACER_ENABLE: 0
+          OMP_NUM_THREADS: 1
+          CUDA_VISIBLE_DEVICES: ""
+        run: |
+          source ${VENV_PATH}/bin/activate
+          pytest tests/tensorflow_models_test.py tests/tensorflow_benchmark_test.py -q
       - name: test_ai_logging
         env:
           DFTRACER_INC_METADATA: 1

@@ -74,7 +74,12 @@ class TFReader(FormatReader):
         #dlp.update(image_size=size)
         #image_tensor = tf.io.decode_image(image_raw)
         #resized_image = tf.convert_to_tensor(self._args.resized_image, dtype=tf.uint8)
-        return self._resized_image
+        batch_size = tf.size(parsed_example['size'])
+        return tf.repeat(
+            self._resized_image[tf.newaxis, ...],
+            repeats=batch_size,
+            axis=0,
+        )
 
     @dlp.log
     def next(self):
@@ -105,12 +110,15 @@ class TFReader(FormatReader):
                 self._dataset = self._dataset.shuffle(buffer_size=self._args.shuffle_size)
 		
         # shard the dataset if it is not done already.
-        if (len(self._file_list) < self._args.comm_size):
-            self._dataset =  self._dataset.shard(num_shards=self._args.comm_size, index=self._args.my_rank)
+        if len(self._file_list) < self._args.comm_size:
+            self._dataset = self._dataset.shard(
+                num_shards=self._args.comm_size,
+                index=self._args.my_rank,
+            )
 	
         self._dataset = self._dataset.batch(self.batch_size, drop_remainder=True)
         self._dataset = self._dataset.map(
-                lambda x: tf.py_function(func=self._parse_image, inp=[x], Tout=[tf.uint8]),
+                lambda x: tf.py_function(func=self._parse_image, inp=[x], Tout=tf.uint8),
                 num_parallel_calls=self._args.computation_threads)
 
         self._dataset = self._dataset.repeat()

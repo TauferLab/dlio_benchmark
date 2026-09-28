@@ -38,6 +38,14 @@ class ModelFactory:
     @staticmethod
     def create_tensorflow_model(model_type: Model):
         """Return a native Keras model, importing only the TensorFlow backend."""
+        if model_type == Model.RESNET:
+            from dlio_benchmark.model.tensorflow.resnet import ResNet50
+
+            return ResNet50()
+        if model_type == Model.UNET:
+            from dlio_benchmark.model.tensorflow.unet3d import UNet3D
+
+            return UNet3D()
         if model_type in (Model.SLEEP, Model.DEFAULT):
             return None
         raise ValueError(f"Unsupported model type: {model_type}")
