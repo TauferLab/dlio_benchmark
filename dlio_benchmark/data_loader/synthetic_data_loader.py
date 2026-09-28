@@ -16,8 +16,6 @@
 """
 
 import math
-import os
-import time
 import torch
 
 from dlio_benchmark.common.constants import MODULE_DATA_LOADER
@@ -26,14 +24,12 @@ from dlio_benchmark.data_loader.base_data_loader import BaseDataLoader
 from dlio_benchmark.utils.utility import utcnow, Profile, dft_ai
 
 dlp = Profile(MODULE_DATA_LOADER)
-ITER_TIME = float(os.environ.get("DLIO_SLEEP_TIME", 1))
 
 
 class SyntheticDataLoader(BaseDataLoader):
     @dlp.log_init
     def __init__(self, format_type, dataset_type, epoch):
         super().__init__(format_type, dataset_type, epoch, DataLoaderType.SYNTHETIC)
-        self.logger.info(f"DLIO_SLEEP_TIME={ITER_TIME}")
         shape = self._args.resized_image.shape
         # Calculate local samples for this rank
         total_samples = self.num_samples

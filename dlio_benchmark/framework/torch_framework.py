@@ -1,7 +1,7 @@
 """
    Copyright (c) 2025, UChicago Argonne, LLC
    All Rights Reserved
-
+   
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
    You may obtain a copy of the License at
@@ -137,7 +137,6 @@ class TorchFramework(Framework):
         return self.model(epoch_number, batch, computation_time)
 
     def model(self, epoch, batch, computation_time):
-        self.args.logger.debug("is model None? %s", self._model is None)
         if self._model is None or batch is None:
             sleep(computation_time)
             return None

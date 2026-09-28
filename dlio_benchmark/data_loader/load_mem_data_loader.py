@@ -14,10 +14,8 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-import logging
 import math
 import numpy as np
-import os
 import time
 import torch
 
@@ -28,9 +26,6 @@ from dlio_benchmark.data_loader.torch_data_loader import TorchDataLoader
 from dlio_benchmark.utils.utility import Profile
 
 dlp = Profile(MODULE_DATA_LOADER)
-ITER_TIME = float(os.environ.get('DLIO_SLEEP_TIME', 1))
-logging.getLogger("LoadMemDataLoader").info(f"DLIO_SLEEP_TIME={ITER_TIME}")
-
 class LoadMemDataLoader(BaseDataLoader):
     """
     Load Memory Data Loader - Preloads entire dataset into memory for fast access.
@@ -45,6 +40,8 @@ class LoadMemDataLoader(BaseDataLoader):
     @dlp.log_init
     def __init__(self, format_type, dataset_type, epoch):
         super().__init__(format_type, dataset_type, epoch, DataLoaderType.LOAD_MEM)
+        self.iter_time = self._args.iter_time
+        self.logger.info(f"reader.iter_time={self.iter_time}")
         self._torch_loader = TorchDataLoader(format_type, dataset_type, epoch)
         self._preloaded_batches = []
         self._preloaded = False
@@ -93,7 +90,7 @@ class LoadMemDataLoader(BaseDataLoader):
         for batch in dlp.iter(self._preloaded_batches):
             dlp.update(step=step)
             step += 1
-            time.sleep(ITER_TIME)
+            time.sleep(self.iter_time)
             yield batch
 
     @dlp.log

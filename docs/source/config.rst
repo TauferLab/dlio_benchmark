@@ -1,11 +1,11 @@
-.. _yaml:
+.. _yaml: 
 
 DLIO Configuration
 ==============================================
-The characteristics of a workload is specified through a YAML file. This file will then be read by `DLIO` to setup the benchmark. Below is an example of such a YAML file.
+The characteristics of a workload is specified through a YAML file. This file will then be read by `DLIO` to setup the benchmark. Below is an example of such a YAML file. 
 
 .. code-block:: yaml
-
+  
   model: unet3d
     model_size_bytes: 99153191
 
@@ -17,7 +17,7 @@ The characteristics of a workload is specified through a YAML file. This file wi
     train: True
     checkpoint: True
 
-  dataset:
+  dataset: 
     data_folder: data/unet3d/
     format: npz
     num_files_train: 168
@@ -25,8 +25,8 @@ The characteristics of a workload is specified through a YAML file. This file wi
     record_length_bytes: 146600628
     record_length_bytes_stdev: 68341808
     record_length_bytes_resize: 2097152
-
-  reader:
+    
+  reader: 
     data_loader: pytorch
     batch_size: 4
     read_threads: 4
@@ -43,31 +43,31 @@ The characteristics of a workload is specified through a YAML file. This file wi
     epochs_between_checkpoints: 2
 
 
-A `DLIO` YAML configuration file contains following sections:
+A `DLIO` YAML configuration file contains following sections: 
 
-* **model** - specifying the name of the model. This is simply an indentifyer of the configuration file. It does not have impact on the actual simulation.
+* **model** - specifying the name of the model. This is simply an indentifyer of the configuration file. It does not have impact on the actual simulation. 
 * **framework** - specifying the framework to use for the benchmark, available options: tensorflow, pytorch
-* **workflow** - specifying what workflow operations to execute in the pipeline. Workflow operations include: dataset generation (``generate_data``), training (``train``), evaluation (``evaluation``), checkpointing (``checkpoint``), debugging (``debug``), etc.
+* **workflow** - specifying what workflow operations to execute in the pipeline. Workflow operations include: dataset generation (``generate_data``), training (``train``), evaluation (``evaluation``), checkpointing (``checkpoint``), debugging (``debug``), etc. 
 * **storage** - specifying the storage backend configuration (local filesystem, S3, or AIStore).
 * **dataset** - specifying all the information related to the dataset.
-* **reader** - specifying the configuration for data loading, such as data_loader, number of workers, etc.
+* **reader** - specifying the configuration for data loading, such as data_loader, number of workers, etc. 
 * **train** - specifying the setup for training
-* **evaluation** - specifying the setup for evaluation.
-* **checkpoint** - specifying the setup for checkpointing.
+* **evaluation** - specifying the setup for evaluation. 
+* **checkpoint** - specifying the setup for checkpointing. 
 * **profiling** - specifying the setup for profiling
 
-More built-in examples can be found in the `workload`_ folder. One can also create custom configuration file. How to load custom configuration file can be found in :ref:`run`.
+More built-in examples can be found in the `workload`_ folder. One can also create custom configuration file. How to load custom configuration file can be found in :ref:`run`. 
 
 model
 ------------------
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
    * - Parameter
      - Default
      - Description
-   * - name
+   * - name 
      - default
      - The name of the model
    * - type
@@ -78,10 +78,10 @@ model
      - The size of the model parameters per GPU in bytes
    * - model_datatype
      - fp16
-     - the datatype of the model parameters. Available options are fp16, fp32, int8, uint8, bf16.
+     - the datatype of the model parameters. Available options are fp16, fp32, int8, uint8, bf16. 
    * - optimizer_datatype
      - fp32
-     - the datatype of the optimizer parameters. Available options are fp16, fp32, int8, uint8, bf16.
+     - the datatype of the optimizer parameters. Available options are fp16, fp32, int8, uint8, bf16. 
    * - optimization_groups
      - []
      - List of optimization group tensors. Use Array notation for yaml.
@@ -90,47 +90,47 @@ model
      - Number of layers to checkpoint. Each layer would be checkpointed separately.
    * - layer_parameters
      - []
-     - List of parameters per layer. This is used to perform I/O per layer.
+     - List of parameters per layer. This is used to perform I/O per layer. 
    * - parallelism
      - {tensor: 1, pipeline: 1, data: -1, zero_stage: 0}
-     - Parallelism configuration for the model.
+     - Parallelism configuration for the model. 
    * - transformer
      - {hidden_size: 2048, ffn_hidden_size: 8196, vocab_size: 32000, num_attention_heads: 32, num_kv_heads: 8}
      - Transformer layer configuration for the model.
 
-The model information is used to determine the checkpoint files.
-The user can specify the model architecture using either optimizaton_groups & layer_parameters, or by specifying the transformer configuration.
+The model information is used to determine the checkpoint files. 
+The user can specify the model architecture using either optimizaton_groups & layer_parameters, or by specifying the transformer configuration. 
 
-The ``optimization_groups`` is a list of tensors that are grouped together for optimization. Suppose optimization_groups is specified as [1024, 528],
-each rank will write the following tensors to the checkpoint file: {"0": {"a": array of 1024, "b": array of 1024}, "1": {"a": array of 528, "b": array of 528}}. The total size of the tensor will be 1024*2 + 528*2. The ``layer_parameters`` is a list of parameters per layer. The ``num_layers`` is used to specify the number of layers to checkpoint. Each layer would be checkpointed separately.
-Suppose layer_parameters is [1024, 2048], each rank in the tensor parallelism group will write the following tensors to the checkpoint file:
+The ``optimization_groups`` is a list of tensors that are grouped together for optimization. Suppose optimization_groups is specified as [1024, 528], 
+each rank will write the following tensors to the checkpoint file: {"0": {"a": array of 1024, "b": array of 1024}, "1": {"a": array of 528, "b": array of 528}}. The total size of the tensor will be 1024*2 + 528*2. The ``layer_parameters`` is a list of parameters per layer. The ``num_layers`` is used to specify the number of layers to checkpoint. Each layer would be checkpointed separately. 
+Suppose layer_parameters is [1024, 2048], each rank in the tensor parallelism group will write the following tensors to the checkpoint file: 
 {'0': array of 1024/TP, "1": array of (2048/TP)}. Please notice the difference in how the optimization groups and layer parameters are treated internally.
 
-We do not suggest the users to specify the model architeure in this way. Instead, we suggest the users to specify the transformer configuration directly which is more intuitive.
-The ``transformer`` configuration is used to specify the hidden size, FFN hidden size, vocab size, number of attention heads and number of kv heads for the transformer layer, which together determined the
-optimization_groups and layer_parameters.
+We do not suggest the users to specify the model architeure in this way. Instead, we suggest the users to specify the transformer configuration directly which is more intuitive. 
+The ``transformer`` configuration is used to specify the hidden size, FFN hidden size, vocab size, number of attention heads and number of kv heads for the transformer layer, which together determined the 
+optimization_groups and layer_parameters. 
 
 .. note::
 
-  By default, if ``parallelism.data`` is not set explicitly, it would be -1. The actual data parallelism size will
-  be determined internally:
+  By default, if ``parallelism.data`` is not set explicitly, it would be -1. The actual data parallelism size will 
+  be determined internally: 
 
   ```math
   data\_parallelism = \frac{world\_size}{pipeline\_parallelism*tensor\_parallelism}
   ```
-  If ``parallelism.data`` is set explicitly, the value provided by the user will be used. In this case, if ``world_size`` < ``data_parallelism``*``pipeline_parallelism``*``tensor_parallelism``, only
-  part of the data will be written (``world_size`` of ``data_parallelism*pipeline_parallelism*tensor_parallelism``).
+  If ``parallelism.data`` is set explicitly, the value provided by the user will be used. In this case, if ``world_size`` < ``data_parallelism``*``pipeline_parallelism``*``tensor_parallelism``, only 
+  part of the data will be written (``world_size`` of ``data_parallelism*pipeline_parallelism*tensor_parallelism``). 
   This is useful if one would like to do testing at smaller scale as a subset of a larger scale simulation. In this case, one has to set
   ``checkpoint.mode`` to be ``subset``.
 
 .. attention::
 
-  Please note that if optimization_groups and layer_parameters are specified, the transformer configuration will be ignored. But we
+  Please note that if optimization_groups and layer_parameters are specified, the transformer configuration will be ignored. But we 
   always suggest to specify the transformer configuration for better readability.
 
-  Please also note that ZeRO stage 3 is not compatiable with ``parallelism.pipeline > 1``.
+  Please also note that ZeRO stage 3 is not compatiable with ``parallelism.pipeline > 1``.  
 
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
@@ -142,7 +142,7 @@ optimization_groups and layer_parameters.
      - Hidden dimension of the transformer layer.
    * - ffn_hidden_size
      - 8196
-     - FFN hidden dimension
+     - FFN hidden dimension 
    * - vocab_size
      - 32000
      - vocab size for the embedding layer
@@ -150,25 +150,25 @@ optimization_groups and layer_parameters.
      - 32
      - number of attention heads
    * - num_kv_heads
-     - 8
-     - Number of key-value heads
-
-In future, we would support more non-transformer type of layers.
+     - 8 
+     - Number of key-value heads 
+  
+In future, we would support more non-transformer type of layers. 
 
 framework
 -------------------
-Specify the frameork (tensorflow or pytorch) as
+Specify the frameork (tensorflow or pytorch) as 
 
 .. code-block:: yaml
 
   framework: tensorflow
 
-No parameters under this group.
+No parameters under this group. 
 
 
 workflow
 ------------------
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
@@ -191,11 +191,11 @@ workflow
      - False
      - whether to perform profiling
 
-.. note::
+.. note:: 
 
- ``evaluation``, ``checkpoint``, and ``profiling`` have depency on ``train``. If ``train`` is set to be ```False```, ``evaluation``, ``checkpoint``, ``profiling`` will be reset to ```False``` automatically.
+ ``evaluation``, ``checkpoint``, and ``profiling`` have depency on ``train``. If ``train`` is set to be ```False```, ``evaluation``, ``checkpoint``, ``profiling`` will be reset to ```False``` automatically. 
 
-  Even though ``generate_data`` and ``train`` can be performed together in one job, we suggest to perform them seperately to eliminate potential caching effect. One can generate the data first by running DLIO with ```generate_data=True``` and ```train=False```, and then run training benchmark with ```generate_data=False``` and ```train=True```.
+  Even though ``generate_data`` and ``train`` can be performed together in one job, we suggest to perform them seperately to eliminate potential caching effect. One can generate the data first by running DLIO with ```generate_data=True``` and ```train=False```, and then run training benchmark with ```generate_data=False``` and ```train=True```. 
 
 storage
 ------------------
@@ -266,7 +266,7 @@ storage
 
 dataset
 ------------------
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
@@ -280,8 +280,8 @@ dataset
      - 0.
      - standard deviation of the sample size
    * - record_length_resize
-     - 0.
-     - resized sample size
+     - 0. 
+     - resized sample size 
    * - format
      - tfrecord
      - data format [tfrecord|csv|npz|jpeg|png|hdf5]
@@ -296,7 +296,7 @@ dataset
      - number of samples per file
    * - data_folder
      - ./data
-     - the path to store the dataset.
+     - the path to store the dataset. 
    * - num_subfolders_train
      - 0
      - number of subfolders that the training set is stored
@@ -314,10 +314,10 @@ dataset
      - level of compression for gzip
    * - enable_chunking
      - False
-     - whether to use chunking to store hdf5.
+     - whether to use chunking to store hdf5. 
    * - chunk_size
      - 0
-     - the chunk size for hdf5.
+     - the chunk size for hdf5. 
    * - keep_files
      - True
      - whether to keep the dataset files afer the simulation.
@@ -338,24 +338,24 @@ dataset
      - (HDF5 only) The maximum shape of resizeable dataset. if not provided, the dataset will not be resizeable and HDF5 will internally set it to the value of `record_dims`
 
 
-.. note::
+.. note:: 
 
-  The training and validation datasets will be put in ```${data_folder}/train``` and ```${data_folder}/valid``` respectively. If ``num_subfolders_train`` and ``num_subfolders_eval`` are larger than one, the datasets will be split into multiple subfolders within ```${data_folder}/train``` and ```${data_folder}/valid``` in a round robin manner.
+  The training and validation datasets will be put in ```${data_folder}/train``` and ```${data_folder}/valid``` respectively. If ``num_subfolders_train`` and ``num_subfolders_eval`` are larger than one, the datasets will be split into multiple subfolders within ```${data_folder}/train``` and ```${data_folder}/valid``` in a round robin manner. 
 
-.. note::
+.. note:: 
 
-  If ``format`` is set to be ``synthetic``, samples will be generated in memory and fed through the data loader specified.
+  If ``format`` is set to be ``synthetic``, samples will be generated in memory and fed through the data loader specified. 
 
 .. attention::
+  
+  For `format: jpeg`, it is not recommended to generate data due to its lossy compression nature. Instead, provide the path to original dataset in the `data_folder` parameter. 
 
-  For `format: jpeg`, it is not recommended to generate data due to its lossy compression nature. Instead, provide the path to original dataset in the `data_folder` parameter.
-
-  More information on JPEG image generator analysis is provided at :ref:`jpeg_generator_issue` section.
+  More information on JPEG image generator analysis is provided at :ref:`jpeg_generator_issue` section. 
   Follow the original dataset directory structure as described in :ref:`directory structure <directory-structure-label>`
-
-reader
+  
+reader 
 ------------------
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
@@ -365,13 +365,16 @@ reader
    * - data_loader
      - tensorflow
      - select the data loader to use [tensorflow|pytorch|synthetic|load_mem]. The load_mem loader caches batches from the PyTorch loader in RAM.
+   * - iter_time
+     - 1.0
+     - Seconds of delay before each cached batch from the ``load_mem`` loader; set to ``0`` to disable the delay. For example, ``++workload.reader.iter_time=0.1``.
    * - batch_size
-     - 1
+     - 1 
      - batch size for training I/O and native model computation
    * - batch_size_eval
-     - 1
+     - 1 
      - batch size for evaluation I/O and native model computation
-   * - read_threads*
+   * - read_threads* 
      - 1
      - number of threads to load the data (for tensorflow and pytorch data loader)
    * - pin_memory
@@ -391,17 +394,17 @@ reader
      - [seed|random|off] whether and how to shuffle the dataset file list
    * - transfer_size
      - 262144
-     - transfer size in byte for tensorflow data loader.
+     - transfer size in byte for tensorflow data loader. 
    * - preprocess_time
      - 0.0
-     - | The amount of emulated preprocess time (sleep) in second.
+     - | The amount of emulated preprocess time (sleep) in second. 
        | Can be specified as a distribution, see :ref:`Time Configuration` for more details.
    * - preprocess_time_stdev
      - 0.0
      - The standard deviation of the amount of emulated preprocess time (sleep) in second.
    * - odirect
      - False
-     - enable O_DIRECT for the npy and npz formats only to bypass OS cache.
+     - enable O_DIRECT for the npy and npz formats only to bypass OS cache. 
    * - transformed_record_dims
      - []
      - The shape of the transformed sample. This will be prioritized over `record_length_resize` if provided.
@@ -409,29 +412,29 @@ reader
      - uint8
      - The data type of the transformed sample. Default is `uint8` (1 byte), supports all `NumPy data types <https://numpy.org/devdocs/user/basics.types.html>`_
 
-.. note::
+.. note:: 
 
-  TensorFlow and PyTorch behave differently for some parameters. For ``read_threads``, tensorflow does
-  not support ``read_threads=0``, but pytorch does, in which case, the main thread will be doing data loader and no overlap between I/O and compute.
+  TensorFlow and PyTorch behave differently for some parameters. For ``read_threads``, tensorflow does 
+  not support ``read_threads=0``, but pytorch does, in which case, the main thread will be doing data loader and no overlap between I/O and compute. 
 
-  For pytorch, if ``prefetch_size`` is set to be 0, it will be changed to 2. In other words, the default value for ``prefetch_size`` in pytorch is 2.
+  For pytorch, if ``prefetch_size`` is set to be 0, it will be changed to 2. In other words, the default value for ``prefetch_size`` in pytorch is 2. 
 
-  In order to be consistent, we set ``prefetch_size`` to be 2 all the time for both pytorch and tensorflow.
+  In order to be consistent, we set ``prefetch_size`` to be 2 all the time for both pytorch and tensorflow. 
 
-.. note::
-  For``synthetic`` data loader, dataset will be generated in memory directly rather than loading from the storage.
+.. note:: 
+  For``synthetic`` data loader, dataset will be generated in memory directly rather than loading from the storage. 
 
-.. note::
+.. note:: 
 
-  We also support custom data reader and data loader. The detailed instruction on how to create custom data loader and data reader are provided here: :ref:`custom_data_loader` and :ref:`custom_data_reader`.
+  We also support custom data reader and data loader. The detailed instruction on how to create custom data loader and data reader are provided here: :ref:`custom_data_loader` and :ref:`custom_data_reader`. 
 
-.. note::
+.. note:: 
 
   For odirect, it is only available for npy and npz formats.  Not yet implimented for all other formats so an error will be raised.
 
 train
 ------------------
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
@@ -453,24 +456,24 @@ train
      - standard deviation of the emulated computation time per step in second
    * - total_training_steps
      - -1
-     - number of training steps to simulate, assuming running the benchmark less than one epoch.
+     - number of training steps to simulate, assuming running the benchmark less than one epoch. 
    * - seed_change_epoch
      - True
      - whether to change random seed after each epoch
    * - seed
      - 123
-     - the random seed
+     - the random seed     
 
-.. note::
+.. note:: 
 
-  To get the simulated computation time, one has to run the actual workload and get out the timing information.
+  To get the simulated computation time, one has to run the actual workload and get out the timing information. 
 
-  In actual distributed training, the communication overhead will increase the time per time step. In DLIO however, we do not simulate communication. Therefore, one can in principle include the communication time as part of `computation_time`.
+  In actual distributed training, the communication overhead will increase the time per time step. In DLIO however, we do not simulate communication. Therefore, one can in principle include the communication time as part of `computation_time`. 
 
 
 evaluation
 ------------------
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
@@ -479,11 +482,11 @@ evaluation
      - Description
    * - eval_time
      - 0
-     - | emulated computation time (sleep) for each evaluation step.
+     - | emulated computation time (sleep) for each evaluation step. 
        | Can be specified as a distribution, see :ref:`Time Configuration` for more details.
    * - eval_time_stdev
      - 0
-     - standard deviation of the emulated computation time (sleep) for each evaluation step.
+     - standard deviation of the emulated computation time (sleep) for each evaluation step. 
    * - epochs_between_evals
      - 1
      - evaluate after x number of epochs
@@ -537,13 +540,13 @@ checkpoint
        | Available options are: default, subset.
    * - randomize_tensor
      - True
-     - | randomize the tensors data. If it is False, all the checkpoint data will be tensor of ones.
+     - | randomize the tensors data. If it is False, all the checkpoint data will be tensor of ones. 
    * - ksm
      - (omitted)
      - | Optional subsection to configure and enable Kernel Samepage Merging (KSM) optimization.
        | **Simply adding this ``ksm:`` section (even if empty, e.g., ``ksm: {}``) enables KSM features.**
-       | See the KSM Configuration table below for optional nested keys to fine-tune KSM behavior.
-       | To use ksm, one has to set randomize_tensor = False.
+       | See the KSM Configuration table below for optional nested keys to fine-tune KSM behavior. 
+       | To use ksm, one has to set randomize_tensor = False. 
 
 **KSM Configuration (Optional keys under `checkpoint.ksm`)**
 
@@ -626,7 +629,7 @@ The following bash script provides an example of configuring the Linux Kernel Sa
 
 output
 ------------------
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
@@ -638,19 +641,19 @@ output
      - The output folder name.
    * - log_file
      - dlio.log
-     - log file name
+     - log file name  
    * - metric
      - {exclude_start_steps: 1, exclude_end_steps: 0}
-     - To specify the steps to be excluded in the metric calculation. By default, we exclude the first step in
-   the beginning.
+     - To specify the steps to be excluded in the metric calculation. By default, we exclude the first step in 
+   the beginning. 
 
 .. note::
-
-   If ``folder`` is not set (None), the output folder will be ```hydra_log/unet3d/$DATE-$TIME```.
+   
+   If ``folder`` is not set (None), the output folder will be ```hydra_log/unet3d/$DATE-$TIME```. 
 
 profiling
 ------------------
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
 
@@ -659,13 +662,13 @@ profiling
      - Description
    * - iostat_devices**
      - [sda, sdb]
-     - specifying the devices to perform iostat tracing.
+     - specifying the devices to perform iostat tracing.  
 
 .. note::
-
+   
    We support multi-level profiling using:
     * ``dftracer``: https://github.com/hariharan-devarajan/dftracer. DFTRACER_ENABLE=1 has to be set to enable profiler.
-    Please refer to :ref:`profiling` on how to enable these profiling tools.
+    Please refer to :ref:`profiling` on how to enable these profiling tools. 
 
 Time Configuration
 ============================================
@@ -726,7 +729,7 @@ For example, to specify distribution of the computation time, one can specify th
 
 How to create a DLIO configuration YAML file
 =============================================
-Creating a YAML file for a workload is very straight forward. Most of the options are essentially the same with the actual workload, such as ``framework``, ``reader``, and many options in ``train``, ``evaluation``, such as ``epochs``. The main work involved is to find out the dataset information and the computation time. For the former, one can to check the original dataset to find out the number of files for training, how many samples per file, and the sample size, data format, etc. For the latter, one has to run the actual workload to find out the comptuation time per training step. One might have to add timing stamp before and after the training step.
+Creating a YAML file for a workload is very straight forward. Most of the options are essentially the same with the actual workload, such as ``framework``, ``reader``, and many options in ``train``, ``evaluation``, such as ``epochs``. The main work involved is to find out the dataset information and the computation time. For the former, one can to check the original dataset to find out the number of files for training, how many samples per file, and the sample size, data format, etc. For the latter, one has to run the actual workload to find out the comptuation time per training step. One might have to add timing stamp before and after the training step. 
 
 The YAML files are stored in the `workload`_ folder.
 It then can be loaded by ```dlio_benchmark``` through hydra (https://hydra.cc/). This will override the default settings. One can override the configurations through command line (https://hydra.cc/docs/advanced/override_grammar/basic/).
@@ -736,21 +739,21 @@ It then can be loaded by ```dlio_benchmark``` through hydra (https://hydra.cc/).
 
 Environment variables
 ============================================
-There are a few environment variables that controls and logging and profiling information.
+There are a few environment variables that controls and logging and profiling information. 
 
-.. list-table::
+.. list-table:: 
    :widths: 15 10 30
    :header-rows: 1
-
+   
    * - Variable name
      - Default
      - Description
    * - DLIO_LOG_LEVEL
      - warning
-     - Specifying the loging level [error|warning|info|debug]. If info is set, it will output the progress for each step.
+     - Specifying the loging level [error|warning|info|debug]. If info is set, it will output the progress for each step. 
    * - DFTRACER_ENABLE
      - 0
      - Enabling the dftracer profiling or not [0|1]
    * - DFTRACER_INC_METADATA
      - 0
-     - Whether to include the meta data in the trace output or not [0|1]
+     - Whether to include the meta data in the trace output or not [0|1] 

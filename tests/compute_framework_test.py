@@ -165,12 +165,15 @@ def test_load_mem_matches_actual_torch_loader_on_cpu(monkeypatch):
     args.prefetch_size = 2
     args.pin_memory = False
     args.reader_class = None
+    monkeypatch.setattr(args, "iter_time", 0.125)
+    monkeypatch.setenv("DLIO_SLEEP_TIME", "9")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     from dlio_benchmark.common.enumerations import DatasetType, FormatType
     from dlio_benchmark.data_loader.torch_data_loader import TorchDataLoader
     from dlio_benchmark.data_loader import load_mem_data_loader as module
 
-    monkeypatch.setattr(module.time, "sleep", lambda duration: None)
+    sleep_calls = []
+    monkeypatch.setattr(module.time, "sleep", sleep_calls.append)
     source_loader = TorchDataLoader(FormatType.SYNTHETIC, DatasetType.TRAIN, 0)
     cached_loader = module.LoadMemDataLoader(
         FormatType.SYNTHETIC, DatasetType.TRAIN, 0
@@ -179,6 +182,7 @@ def test_load_mem_matches_actual_torch_loader_on_cpu(monkeypatch):
     source = list(source_loader.next())
     cached = list(cached_loader.next())
     assert len(source) == len(cached) == 2
+    assert sleep_calls == [0.125, 0.125]
     for source_batch, cached_batch in zip(source, cached):
         assert cached_batch.shape == source_batch.shape
         assert cached_batch.dtype == source_batch.dtype
@@ -256,3 +260,19 @@ def test_compute_config_preserves_train_and_eval_batch_sizes():
     assert args.compute is True
     assert args.batch_size == 5
     assert args.batch_size_eval == 3
+
+
+def test_reader_iter_time_config_and_validation(monkeypatch):
+    from dlio_benchmark.utils.config import GetConfig, LoadConfig
+
+    args = _args()
+    monkeypatch.setattr(args, "iter_time", 1.0)
+    assert GetConfig(args, "reader.iter_time") == "1.0"
+    LoadConfig(args, {"reader": {"iter_time": 0}})
+    assert GetConfig(args, "reader.iter_time") == "0.0"
+    LoadConfig(args, {"reader": {"iter_time": 0.25}})
+    assert GetConfig(args, "reader.iter_time") == "0.25"
+    for value in (-1, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="reader.iter_time"):
+            LoadConfig(args, {"reader": {"iter_time": value}})
+    assert args.iter_time == 0.25

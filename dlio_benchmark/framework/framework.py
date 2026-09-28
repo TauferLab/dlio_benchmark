@@ -55,10 +55,10 @@ class Framework(ABC):
                                                          dataset_type=DatasetType.VALID, epoch=epoch)
         self.storage = StorageFactory().get_storage(self.args.storage_type, self.args.storage_root, self.args.framework)
 
-    @abstractmethod
+    @abstractmethod 
     def get_type(self):
         pass
-
+    
     @abstractmethod
     def start_framework_profiler(self):
         pass
