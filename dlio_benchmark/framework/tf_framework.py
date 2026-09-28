@@ -15,20 +15,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from dlio_benchmark.common.constants import MODULE_AI_FRAMEWORK
-from dlio_benchmark.utils.utility import Profile, dft_ai, sleep, DLIOMPI
-from dlio_benchmark.model.model_factory import ModelFactory
-from dlio_benchmark.framework.framework import Framework
-from dlio_benchmark.profiler.profiler_factory import ProfilerFactory
-from dlio_benchmark.common.enumerations import (
-    FrameworkType,
-    Profiler,
-    DatasetType,
-    MetadataType,
-)
-from dlio_benchmark.storage.storage_factory import StorageFactory
-from dlio_benchmark.common.enumerations import FrameworkType, Model, FormatType
+"""TensorFlow framework integration for DLIO's native Keras models."""
 
+from typing import Any, Optional, Tuple
+
+import numpy as np
+
+from dlio_benchmark.common.constants import MODULE_AI_FRAMEWORK
+from dlio_benchmark.common.enumerations import (
+    DataLoaderType,
+    DatasetType,
+    FrameworkType,
+    MetadataType,
+    Model,
+    Profiler,
+)
+from dlio_benchmark.framework.framework import Framework
+from dlio_benchmark.model.model_factory import ModelFactory
+from dlio_benchmark.profiler.profiler_factory import ProfilerFactory
+from dlio_benchmark.utils.utility import DLIOMPI, Profile, dft_ai, sleep
+
+# DFTracer currently imports PyTorch/Triton while utility is initialized. Load
+# it before TensorFlow to avoid a Triton/TensorFlow initialization crash in
+# direct TFFramework imports.
 import tensorflow as tf
 from tensorflow.python.framework import errors
 
@@ -38,29 +47,57 @@ dlp = Profile(MODULE_AI_FRAMEWORK)
 
 
 class TFFramework(Framework):
+    """Own optimization and native GradientTape training for Keras models."""
+
     __instance = None
 
     @dlp.log_init
     def __init__(
-        self, profiling, model: Model = Model.SLEEP, communication: bool = False
+        self,
+        profiling,
+        model: Model = Model.SLEEP,
+        communication: bool = False,
     ):
         super().__init__()
         self.profiling = profiling
-        self._model = ModelFactory.create_model(
-            FrameworkType.TENSORFLOW,
-            model,
-            communication,
-            gpu_id=DLIOMPI.get_instance().local_rank(),
-        )
-        # TODO: Temporary fix, need to separate the iostat profiler (needed for report gen) and the others
+        self.reader_handler = None
+        self.model_type = model
+        self.communication = communication
+        self.native_model = None
+        self._model = None
+        self._optimizer = None
+        self._loss_function = None
+
+        if (
+            model not in (Model.SLEEP, Model.DEFAULT)
+            and DLIOMPI.get_instance().size() > 1
+        ):
+            raise NotImplementedError(
+                "Native TensorFlow model execution supports one MPI rank; "
+                "use PyTorch for multi-rank compute or disable train.compute."
+            )
+
+        if model not in (Model.SLEEP, Model.DEFAULT):
+            self.native_model = ModelFactory.create_tensorflow_model(model)
+            self._model = self.native_model
+            self._loss_function = tf.keras.losses.SparseCategoricalCrossentropy(
+                from_logits=True
+            )
+            if model == Model.RESNET:
+                self._optimizer = tf.keras.optimizers.SGD(learning_rate=0.1)
+            elif model == Model.UNET:
+                self._optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+            else:
+                raise ValueError(f"Unsupported TensorFlow model: {model}")
+
+        # Temporary behavior retained from the existing profiler integration.
         if profiling:
             if self.args.profiler != Profiler.IOSTAT:
                 self.tensorboard = ProfilerFactory.get_profiler(Profiler.NONE)
             else:
-                self.tensorboard = ProfilerFactory.get_profiler(Profiler.TENSORBOARD)
-
-        # self.model = DDP(model)
-        self.reader_handler = None
+                self.tensorboard = ProfilerFactory.get_profiler(
+                    Profiler.TENSORBOARD
+                )
 
     @dlp.log
     def init_loader(self, format_type, epoch=0, data_loader=None):
@@ -74,11 +111,15 @@ class TFFramework(Framework):
 
     @staticmethod
     def get_instance(
-        profiling, model: Model = Model.SLEEP, communication: bool = False
+        profiling,
+        model: Model = Model.SLEEP,
+        communication: bool = False,
     ):
         """Static access method."""
         if TFFramework.__instance is None:
-            TFFramework.__instance = TFFramework(profiling, model, communication)
+            TFFramework.__instance = TFFramework(
+                profiling, model, communication
+            )
         return TFFramework.__instance
 
     @dlp.log
@@ -88,28 +129,218 @@ class TFFramework(Framework):
 
     @dlp.log
     def stop_framework_profiler(self):
-        # if self.profiling:
-        #    self.tensorboard.stop()
+        if self.profiling:
+           self.tensorboard.stop()
         pass
 
     @dlp.log
     def trace_object(self, string, step, r):
-        pass  # tf.profiler.experimental.Trace(string, step_num=step, _r=r)
+        pass
 
     @dft_ai.compute
     def compute(self, batch, epoch_number, step, computation_time):
         return self.model(epoch_number, batch, computation_time)
-        # tf.function(self.model)(epoch_number, step, computation_time)
 
     def model(self, epoch, batch, computation_time):
-        if self._model is None:
+        if self._model is None or batch is None:
             sleep(computation_time)
+            return None
+        return self._train_batch(batch)
+
+    @staticmethod
+    def _split_batch(batch) -> Tuple[Any, Optional[Any]]:
+        while isinstance(batch, (tuple, list)) and len(batch) == 1:
+            batch = batch[0]
+        if isinstance(batch, dict):
+            inputs = None
+            target = None
+            for key in ("data", "image", "input", "inputs"):
+                if key in batch:
+                    inputs = batch[key]
+                    break
+            for key in ("label", "labels", "target", "targets"):
+                if key in batch:
+                    target = batch[key]
+                    break
+            if inputs is None and len(batch) == 1:
+                inputs = next(iter(batch.values()))
+            if inputs is None:
+                raise ValueError(
+                    f"Could not find model input in batch keys {tuple(batch)}"
+                )
+            return inputs, target
+        if isinstance(batch, (tuple, list)) and len(batch) == 2:
+            return batch[0], batch[1]
+        return batch, None
+
+    @staticmethod
+    def _as_tensor(value):
+        if isinstance(value, tf.Tensor):
+            return value
+        if hasattr(value, "detach") and hasattr(value, "cpu"):
+            value = value.detach().cpu().numpy()
+        elif hasattr(value, "as_array"):
+            value = value.as_array()
+        elif hasattr(value, "as_tensor"):
+            value = value.as_tensor()
+            if hasattr(value, "as_array"):
+                value = value.as_array()
+        if isinstance(value, np.ndarray):
+            return tf.convert_to_tensor(value)
+        if hasattr(value, "__dlpack__"):
+            return tf.experimental.dlpack.from_dlpack(value.__dlpack__())
+        return tf.convert_to_tensor(value)
+
+    def _prepare_resnet_batch(self, batch):
+        inputs, target = self._split_batch(batch)
+        inputs = self._as_tensor(inputs)
+
+        if inputs.shape.rank == 2:
+            inputs = tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=-1)
+            inputs = tf.repeat(inputs, repeats=3, axis=-1)
+        elif inputs.shape.rank == 3:
+            inputs = tf.expand_dims(inputs, axis=-1)
+            inputs = tf.repeat(inputs, repeats=3, axis=-1)
+        elif inputs.shape.rank == 4:
+            if inputs.shape[-1] == 1:
+                inputs = tf.repeat(inputs, repeats=3, axis=-1)
+            elif inputs.shape[-1] != 3 and inputs.shape[1] in (1, 3):
+                inputs = tf.transpose(inputs, perm=(0, 2, 3, 1))
+                if inputs.shape[-1] == 1:
+                    inputs = tf.repeat(inputs, repeats=3, axis=-1)
+            elif inputs.shape[-1] != 3:
+                raise ValueError(
+                    "ResNet input must be BHW, BCHW, or BHWC with 1/3 channels; "
+                    f"got {inputs.shape}"
+                )
         else:
-            self._model.compute(batch)
+            raise ValueError(
+                f"ResNet input must have 2-4 dimensions; got {inputs.shape}"
+            )
+
+        if target is not None:
+            target = self._as_tensor(target)
+        inputs = tf.cast(inputs, tf.float32)
+
+        if target is None:
+            target = tf.zeros((tf.shape(inputs)[0],), dtype=tf.int32)
+        elif target.shape.rank == 2:
+            if target.shape[1] == 1:
+                target = target[:, 0]
+            else:
+                target = tf.argmax(target, axis=-1, output_type=tf.int32)
+        target = tf.cast(target, tf.int32)
+        return inputs, target
+
+    def _prepare_unet_batch(self, batch):
+        inputs, target = self._split_batch(batch)
+        inputs = self._as_tensor(inputs)
+
+        if inputs.shape.rank == 3:
+            inputs = tf.expand_dims(inputs, axis=1)
+            inputs = tf.expand_dims(inputs, axis=-1)
+        elif inputs.shape.rank == 4:
+            inputs = tf.expand_dims(inputs, axis=-1)
+        elif inputs.shape.rank == 5:
+            if inputs.shape[-1] != 1 and inputs.shape[1] == 1:
+                inputs = tf.transpose(inputs, perm=(0, 2, 3, 4, 1))
+            elif inputs.shape[-1] != 1:
+                raise ValueError(
+                    "UNet3D input must be BDHW, BCDHW, or BDHWC with one "
+                    f"channel; got {inputs.shape}"
+                )
+        else:
+            raise ValueError(
+                f"UNet3D input must have 3-5 dimensions; got {inputs.shape}"
+            )
+
+        if target is not None:
+            target = self._as_tensor(target)
+        inputs = tf.cast(inputs, tf.float32)
+
+        # Scalar DALI labels are not voxel masks, so use the same valid
+        # synthetic mask as input-only loaders.
+        if target is None or target.shape.rank <= 2:
+            target = tf.zeros(tf.shape(inputs)[:4], dtype=tf.int32)
+        else:
+            if target.shape.rank == 3:
+                target = tf.expand_dims(target, axis=1)
+            elif target.shape.rank == 5:
+                # TensorFlow's native layout is channel-last, so resolve
+                # depth-one NDHWC masks in favor of their trailing channel.
+                if target.shape[-1] == 1:
+                    target = target[..., 0]
+                elif target.shape[-1] == 3:
+                    target = tf.argmax(target, axis=-1, output_type=tf.int32)
+                elif target.shape[1] == 1:
+                    target = target[:, 0]
+                elif target.shape[1] == 3:
+                    target = tf.argmax(target, axis=1, output_type=tf.int32)
+                else:
+                    raise ValueError(
+                        "UNet3D target must have one label per voxel or "
+                        f"three class channels; got {target.shape}"
+                    )
+            elif target.shape.rank != 4:
+                raise ValueError(
+                    "UNet3D target must be BHW, BDHW, BCDHW, or BDHWC; "
+                    f"got {target.shape}"
+                )
+            target = tf.cast(target, tf.int32)
+        return inputs, target
+
+    def _prepare_batch(self, batch):
+        if self.model_type == Model.RESNET:
+            return self._prepare_resnet_batch(batch)
+        if self.model_type == Model.UNET:
+            return self._prepare_unet_batch(batch)
+        raise ValueError(f"Unsupported TensorFlow model: {self.model_type}")
+
+    @staticmethod
+    def _align_unet_target(prediction, target):
+        """Resize integer segmentation masks with nearest-neighbor sampling."""
+        target_shape = tf.shape(prediction)[1:4]
+
+        def resize_axis(tensor, axis, new_size):
+            old_size = tf.shape(tensor)[axis]
+            indices = tf.math.floordiv(
+                tf.range(new_size, dtype=tf.int32) * old_size,
+                new_size,
+            )
+            indices = tf.minimum(indices, old_size - 1)
+            return tf.gather(tensor, indices, axis=axis)
+
+        target = resize_axis(target, 1, target_shape[0])
+        target = resize_axis(target, 2, target_shape[1])
+        return resize_axis(target, 3, target_shape[2])
+
+    def _train_batch(self, batch):
+        inputs, target = self._prepare_batch(batch)
+        with tf.GradientTape() as tape:
+            prediction = self._model(inputs, training=True)
+            if self.model_type == Model.UNET:
+                target = self._align_unet_target(prediction, target)
+            loss = self._loss_function(target, prediction)
+
+        gradients = tape.gradient(loss, self._model.trainable_variables)
+        gradients_and_variables = [
+            (gradient, variable)
+            for gradient, variable in zip(
+                gradients, self._model.trainable_variables
+            )
+            if gradient is not None
+        ]
+        if gradients_and_variables:
+            self._optimizer.apply_gradients(gradients_and_variables)
+        else:
+            self.args.logger.warning(
+                "No TensorFlow gradients were produced; optimizer step skipped"
+            )
+        return prediction, loss
 
     def finalize(self):
-        if self._model is not None:
-            self._model.finalize()
+        if self.native_model is not None:
+            self.native_model.finalize()
 
     @dlp.log
     def get_loader(self, dataset_type=DatasetType.TRAIN):

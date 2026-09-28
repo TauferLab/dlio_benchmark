@@ -1,2 +1,5 @@
+"""Native model construction for DLIO compute workloads."""
+
 from dlio_benchmark.model.model_factory import ModelFactory
-from dlio_benchmark.model.model import UnifiedModel
+
+__all__ = ["ModelFactory"]

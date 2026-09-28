@@ -79,9 +79,6 @@ class DLIOBenchmark(object):
         t0 = time()
         self.args: ConfigArguments = ConfigArguments.get_instance()  # type: ignore
         LoadConfig(self.args, cfg)
-        self.storage = StorageFactory().get_storage(
-            self.args.storage_type, self.args.storage_root, self.args.framework
-        )
 
         self.output_folder = self.args.output_folder
         os.makedirs(self.args.output_folder, mode=0o755, exist_ok=True)
@@ -97,10 +94,7 @@ class DLIOBenchmark(object):
         if not self.args.compute:
             model_enum = Model.DEFAULT
         self.framework = FrameworkFactory().get_framework(
-            self.args.framework,
-            self.args.do_profiling,
-            model_enum,
-            self.args.communication,
+            self.args.framework, self.args.do_profiling, model_enum, self.args.communication
         )
         self.storage = StorageFactory().get_storage(
             self.args.storage_type, self.args.storage_root, self.args.framework
@@ -108,10 +102,6 @@ class DLIOBenchmark(object):
         if self.args.storage_root:
             self.storage.create_namespace(exist_ok=True)
 
-        model_enum = Model(self.args.model)
-        self.framework = FrameworkFactory().get_framework(
-            self.args.framework, self.args.do_profiling, model_enum
-        )
 
         # Delete previous logfile
         if self.my_rank == 0:
@@ -480,7 +470,6 @@ class DLIOBenchmark(object):
             self.stats.start_loading()
         # Always closes the current block. It is safe to call end_block for already ended block, as there's a guard inside.
         self.stats.end_block(epoch, block, block_step - 1)
-        self.framework.finalize()
         self.comm.barrier()
         if (
             self.do_checkpoint

@@ -281,8 +281,19 @@ class ConfigArguments:
             dlp_logger.finalize()
 
     @dlp.log
+    def validate_communication(self):
+        """Normalize communication settings before framework construction."""
+        if self.comm_size == 1 and self.communication:
+            self.logger.warning(
+                f"{utcnow()} Forcing workload.train.communication=False because "
+                "the MPI world size is 1; distributed communication requires more than one rank."
+            )
+            self.communication = False
+
+    @dlp.log
     def validate(self):
         """ validate whether the parameters are set correctly"""
+        self.validate_communication()
         if (self.do_profiling == True) and (self.profiler == Profiler('darshan')):
             if ('LD_PRELOAD' not in os.environ or os.environ["LD_PRELOAD"].find("libdarshan") == -1):
                 raise Exception("Please set darshan runtime library in LD_PRELOAD")
@@ -1214,3 +1225,7 @@ def LoadConfig(args, config):
     if 'metric' in config:
         if 'au' in config['metric']:
             args.au = config['metric']['au']
+
+    # This runtime-dependent validation must happen before FrameworkFactory is
+    # called so a single-rank run never initializes a distributed backend.
+    args.validate_communication()

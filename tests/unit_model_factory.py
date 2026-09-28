@@ -1,32 +1,38 @@
-from dlio_benchmark.common.enumerations import FrameworkType, Model
 import pytest
 
-import torch
-import tensorflow as tf
-
+from dlio_benchmark.common.enumerations import FrameworkType, Model
 from dlio_benchmark.model import ModelFactory
 
-params = [
-    (FrameworkType.PYTORCH, Model.RESNET, (1, 3, 224, 224), torch.Tensor),
-    (FrameworkType.TENSORFLOW, Model.RESNET, (1, 224, 224, 3), tf.Tensor),
-    (FrameworkType.PYTORCH, Model.RESNET, (1, 3, 64, 64), torch.Tensor),  # Increased size from 32x32 to 64x64
-    (FrameworkType.TENSORFLOW, Model.RESNET, (1, 64, 64, 3), tf.Tensor),  # Increased size from 32x32 to 64x64
-]
 
-@pytest.mark.parametrize("framework, model_type, input_shape, expected_type", params)
-def test_model_factory_output_type(framework, model_type, input_shape, expected_type):
-    model = ModelFactory().create_model(framework, model_type, communication=False, gpu_id=0)
-    if framework == FrameworkType.PYTORCH:
-        input_data = torch.randn(*input_shape)
-    else:
-        input_data = tf.random.normal(input_shape)
-    # Backward pass
-    random_out = torch.randn(1, 1000) if framework == FrameworkType.PYTORCH else tf.random.normal((1, 1000))
-    assert random_out.shape == (1, 1000)
-    model.compute([input_data, random_out])
+def test_pytorch_resnet_is_directly_callable():
+    torch = pytest.importorskip("torch")
+
+    model = ModelFactory.create_model(FrameworkType.PYTORCH, Model.RESNET)
+    model.eval()
+
+    assert isinstance(model, torch.nn.Module)
+    with torch.no_grad():
+        output = model(torch.randn(1, 3, 64, 64))
+    assert output.shape == (1, 1000)
 
 
-if __name__ == "__main__":
-    # Run test_model_factory
-    for param in params:
-        test_model_factory_output_type(*param)
+def test_tensorflow_resnet_is_directly_callable():
+    tf = pytest.importorskip("tensorflow")
+
+    model = ModelFactory.create_model(FrameworkType.TENSORFLOW, Model.RESNET)
+    output = model(tf.random.normal((1, 64, 64, 3)), training=False)
+
+    assert isinstance(model, tf.keras.Model)
+    assert output.shape == (1, 1000)
+
+
+@pytest.mark.parametrize("framework", list(FrameworkType))
+@pytest.mark.parametrize("model_type", [Model.DEFAULT, Model.SLEEP])
+def test_non_model_compute_types_return_none(framework, model_type):
+    assert ModelFactory.create_model(framework, model_type) is None
+
+
+@pytest.mark.parametrize("framework", list(FrameworkType))
+def test_unsupported_model_is_rejected(framework):
+    with pytest.raises(ValueError, match="Unsupported model type"):
+        ModelFactory.create_model(framework, Model.BERT)

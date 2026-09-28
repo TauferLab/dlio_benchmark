@@ -367,10 +367,10 @@ reader
      - select the data loader to use [tensorflow|pytorch|synthetic]. 
    * - batch_size
      - 1 
-     - batch size for training
+     - batch size for training I/O and native model computation
    * - batch_size_eval
      - 1 
-     - batch size for evaluation
+     - batch size for evaluation I/O and native model computation
    * - read_threads* 
      - 1
      - number of threads to load the data (for tensorflow and pytorch data loader)
