@@ -88,6 +88,7 @@ class ConfigArguments:
     dont_use_mmap: bool = False
     computation_threads: int = 1
     iter_time: float = 1.0
+    communication: bool = False
     compute: bool = False
     computation_time: ClassVar[Dict[str, Any]] = {}
     preprocess_time: ClassVar[Dict[str, Any]] = {}
@@ -281,8 +282,19 @@ class ConfigArguments:
             dlp_logger.finalize()
 
     @dlp.log
+    def validate_communication(self):
+        """Normalize communication before a framework may initialize DDP."""
+        if self.comm_size <= 1 and self.communication:
+            self.logger.warning(
+                f"{utcnow()} Forcing workload.train.communication=False because "
+                "the MPI world size is 1; distributed communication requires more than one rank."
+            )
+            self.communication = False
+
+    @dlp.log
     def validate(self):
         """ validate whether the parameters are set correctly"""
+        self.validate_communication()
         if (self.do_profiling == True) and (self.profiler == Profiler('darshan')):
             if ('LD_PRELOAD' not in os.environ or os.environ["LD_PRELOAD"].find("libdarshan") == -1):
                 raise Exception("Please set darshan runtime library in LD_PRELOAD")
@@ -782,6 +794,8 @@ def GetConfig(args, key):
             value = args.computation_time.get("stdev", None)
         elif keys[1] == "seed":
             value = args.seed
+        elif keys[1] == "communication":
+            value = args.communication
         elif keys[1] == "compute":
             value = args.compute
 
@@ -1059,6 +1073,8 @@ def LoadConfig(args, config):
             args.computation_time["stdev"] = config['train']['computation_time_stdev']
         if 'seed' in config['train']:
             args.seed = config['train']['seed']
+        if 'communication' in config['train']:
+            args.communication = config['train']['communication']
         if 'compute' in config['train']:
             args.compute = config['train']['compute']
 
@@ -1220,3 +1236,6 @@ def LoadConfig(args, config):
     if 'metric' in config:
         if 'au' in config['metric']:
             args.au = config['metric']['au']
+
+    # DLIOBenchmark constructs the framework before later workload validation.
+    args.validate_communication()

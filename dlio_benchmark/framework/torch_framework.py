@@ -17,6 +17,8 @@
 
 """PyTorch framework integration for DLIO's native models."""
 
+import os
+import socket
 from typing import Any, Optional, Tuple
 
 import numpy as np
@@ -51,11 +53,14 @@ class TorchFramework(Framework):
         self,
         profiling,
         model: Model = Model.SLEEP,
+        communication: bool = False,
     ):
         super().__init__()
         self.profiling = profiling
         self.reader_handler = None
         self.model_type = model
+        self.communication = communication
+        self._distributed_initialized_here = False
         self._optimizer = None
         self._loss_function = None
         self.native_model = None
@@ -70,12 +75,92 @@ class TorchFramework(Framework):
         else:
             self.device = torch.device("cpu")
 
+        # Retain the diagnostic from the source branch for rank/device setup.
+        print(
+            f"Creating model for framework {FrameworkType.PYTORCH}, "
+            f"model_type {model}, communication {communication}, "
+            f"gpu_id {self.gpu_id}"
+        )
         if model not in (Model.SLEEP, Model.DEFAULT):
-            self.native_model = ModelFactory.create_pytorch_model(model)
-            self.native_model.to(self.device)
-            self._training_model = self.native_model
-            self._configure_training(model)
-            self._model = self._configure_tracing(self._training_model)
+            try:
+                self.native_model = ModelFactory.create_pytorch_model(model)
+                self.native_model.to(self.device)
+                self._training_model = self._configure_distributed(
+                    self.native_model, communication
+                )
+                self._configure_training(model)
+                self._model = self._configure_tracing(self._training_model)
+            except BaseException:
+                # DDP may have initialized a process group before a later
+                # optimizer or tracing step fails.
+                self.finalize()
+                raise
+        elif communication:
+            self.args.logger.warning(
+                "Communication requested without native compute; no gradients will be exchanged"
+            )
+
+    def _configure_distributed(self, model, communication):
+        """Wrap a native module with MPI-sized DDP when requested."""
+        if not communication:
+            return model
+
+        mpi = DLIOMPI.get_instance()
+        world_size = mpi.size()
+        if world_size <= 1:
+            self.args.logger.warning(
+                "Disabling PyTorch distributed communication for a one-rank run"
+            )
+            self.communication = False
+            return model
+
+        import torch.distributed as distributed
+        from torch.nn.parallel import DistributedDataParallel
+
+        backend = os.environ.get(
+            "TORCH_DISTRIBUTED_BACKEND",
+            "nccl" if self.device.type == "cuda" else "gloo",
+        )
+        if distributed.is_initialized():
+            actual = (
+                distributed.get_backend(),
+                distributed.get_rank(),
+                distributed.get_world_size(),
+            )
+            expected = (backend, mpi.rank(), world_size)
+            if actual != expected:
+                raise ValueError(
+                    "Existing PyTorch process group backend, rank, or world size "
+                    f"does not match MPI: expected {expected}, found {actual}"
+                )
+        else:
+            master_addr = socket.gethostname() if mpi.rank() == 0 else None
+            master_addr = mpi.comm().bcast(master_addr, root=0)
+            os.environ.setdefault("MASTER_ADDR", master_addr)
+            os.environ.setdefault("MASTER_PORT", "2345")
+            try:
+                distributed.init_process_group(
+                    backend=backend,
+                    rank=mpi.rank(),
+                    world_size=world_size,
+                )
+            except BaseException:
+                if distributed.is_initialized():
+                    distributed.destroy_process_group()
+                raise
+            self._distributed_initialized_here = True
+
+        try:
+            if self.device.type == "cuda":
+                return DistributedDataParallel(
+                    model,
+                    device_ids=[self.gpu_id],
+                    output_device=self.gpu_id,
+                )
+            return DistributedDataParallel(model)
+        except BaseException:
+            self.finalize()
+            raise
 
     def _configure_training(self, model_type):
         """Defaults for native classifiers; architecture PRs may specialize."""
@@ -108,11 +193,12 @@ class TorchFramework(Framework):
     def get_instance(
         profiling,
         model: Model = Model.SLEEP,
+        communication: bool = False,
     ):
         """Static access method."""
         if TorchFramework.__instance is None:
             TorchFramework.__instance = TorchFramework(
-                profiling, model
+                profiling, model, communication
             )
         return TorchFramework.__instance
 
@@ -236,8 +322,15 @@ class TorchFramework(Framework):
         return prediction, loss
 
     def finalize(self):
-        """No framework resources are allocated by single-rank training."""
-        return None
+        """Release only a PyTorch process group created by this framework."""
+        if self._distributed_initialized_here:
+            import torch.distributed as distributed
+
+            try:
+                if distributed.is_initialized():
+                    distributed.destroy_process_group()
+            finally:
+                self._distributed_initialized_here = False
 
     @dlp.log
     def get_loader(self, dataset_type=DatasetType.TRAIN):

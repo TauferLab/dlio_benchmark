@@ -33,7 +33,7 @@ from dlio_benchmark.common.enumerations import (
 from dlio_benchmark.framework.framework import Framework
 from dlio_benchmark.model.model_factory import ModelFactory
 from dlio_benchmark.profiler.profiler_factory import ProfilerFactory
-from dlio_benchmark.utils.utility import Profile, dft_ai, sleep
+from dlio_benchmark.utils.utility import DLIOMPI, Profile, dft_ai, sleep
 
 # DFTracer currently imports PyTorch/Triton while utility is initialized. Load
 # it before TensorFlow to avoid a Triton/TensorFlow initialization crash in
@@ -56,15 +56,23 @@ class TFFramework(Framework):
         self,
         profiling,
         model: Model = Model.SLEEP,
+        communication: bool = False,
     ):
         super().__init__()
         self.profiling = profiling
         self.reader_handler = None
         self.model_type = model
+        self.communication = communication
         self.native_model = None
         self._model = None
         self._optimizer = None
         self._loss_function = None
+
+        if model not in (Model.SLEEP, Model.DEFAULT) and DLIOMPI.get_instance().size() > 1:
+            raise NotImplementedError(
+                "Native TensorFlow model execution supports one MPI rank; "
+                "use PyTorch for multi-rank compute or disable train.compute."
+            )
 
         # Temporary behavior retained from the existing profiler integration.
         if profiling:
@@ -102,11 +110,12 @@ class TFFramework(Framework):
     def get_instance(
         profiling,
         model: Model = Model.SLEEP,
+        communication: bool = False,
     ):
         """Static access method."""
         if TFFramework.__instance is None:
             TFFramework.__instance = TFFramework(
-                profiling, model
+                profiling, model, communication
             )
         return TFFramework.__instance
 

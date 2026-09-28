@@ -84,6 +84,10 @@ jobs:
         run: |
           source ${VENV_PATH}/bin/activate
           pytest tests/compute_framework_test.py tests/synthetic_data_loader_test.py -v
+      - name: test_communication
+        run: |
+          source ${VENV_PATH}/bin/activate
+          pytest tests/config_communication_test.py tests/communication_test.py -v
       - name: test_ai_logging
         env:
           DFTRACER_INC_METADATA: 1

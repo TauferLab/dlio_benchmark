@@ -78,10 +78,13 @@ class DLIOBenchmark(object):
         self.data_folder = self.args.data_folder
         self.storage_root = self.args.storage_root
         model_enum = self.args.model if self.args.compute else Model.DEFAULT
-        self.framework = FrameworkFactory().get_framework(self.args.framework,
-                                                          self.args.do_profiling, model_enum)
-        self.storage = StorageFactory().get_storage(self.args.storage_type, self.args.storage_root,
-                                                    self.args.framework)
+        self.framework = FrameworkFactory().get_framework(
+            self.args.framework, self.args.do_profiling, model_enum,
+            self.args.communication,
+        )
+        self.storage = StorageFactory().get_storage(
+            self.args.storage_type, self.args.storage_root, self.args.framework
+        )
         if self.args.storage_root:
             self.storage.create_namespace(exist_ok=True)
 
@@ -489,10 +492,19 @@ class DLIOBenchmark(object):
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
-def run_benchmark(cfg: DictConfig):    
-    benchmark = DLIOBenchmark(cfg['workload'])
-    benchmark.initialize()
-    benchmark.run()
+def run_benchmark(cfg: DictConfig):
+    benchmark = DLIOBenchmark(cfg["workload"])
+    try:
+        benchmark.initialize()
+        benchmark.run()
+    except BaseException:
+        # The full benchmark finalizer assumes initialization completed.
+        # Preserve the primary failure even if local group teardown also fails.
+        try:
+            benchmark.framework.finalize()
+        except Exception:
+            pass
+        raise
     benchmark.finalize()
 
 def set_dftracer_initialize(status):
