@@ -71,8 +71,9 @@ class Framework(ABC):
     def trace_object(self, string, step, r):
         pass
 
-    def model(epoch, batch, computation_time):
-        sleep(computation_time)
+    @abstractmethod
+    def model(self, epoch, batch, computation_time):
+        pass
 
     @abstractmethod
     def compute(self, batch, epoch_number, step, computation_time):
@@ -80,6 +81,10 @@ class Framework(ABC):
 
     @abstractmethod
     def get_loader(self, dataset_type):
+        pass
+
+    @abstractmethod
+    def finalize(self):
         pass
 
     @abstractmethod

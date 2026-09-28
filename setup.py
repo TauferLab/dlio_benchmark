@@ -8,7 +8,6 @@ HYDRA_VERSION = "1.3.2"
 test_deps = [
     "pytest",
     "pytest-xdist",
-    "dftracer>=2.0.1",
 ]
 core_deps = [
     "Pillow>=9.3.0",
@@ -19,15 +18,11 @@ core_deps = [
     "omegaconf>=2.2.0",
     "pandas>=1.5.1",
     "psutil>=5.9.8",
-    "pydftracer>=2.0.2"
+    "pydftracer[dynamo]>=2.0.3"
 ]
 x86_deps = [
     f"hydra-core>={HYDRA_VERSION}",
-    "nvidia-dali-cuda120>=1.34.0",
     "tensorflow>=2.13.1",
-    "torch>=2.2.0",
-    "torchaudio",
-    "torchvision",
 ]
 ppc_deps = [
     f"hydra-core @ git+https://github.com/facebookresearch/hydra.git@v{HYDRA_VERSION}#egg=hydra-core"
@@ -42,8 +37,10 @@ else:
 
 extras = {
     "test": test_deps,
-    "dftracer": [
-        "dftracer>=2.0.1",
+    "dftracer": [],  # Compatibility alias: pydftracer[dynamo] is in core_deps.
+    "cuda": [
+        "torch>=2.5.1",
+        "nvidia-dali-cuda120>=1.34.0",
     ],
     "s3": [
         "s3torchconnector",
@@ -103,10 +100,6 @@ setup(
         "dlio_benchmark.configs.hydra.job_logging": ["*.yaml"],
         "dlio_benchmark.configs.workload": ["*.yaml"],
     },
-    dependency_links=[
-        "https://download.pytorch.org/whl/cpu",
-        "https://developer.download.nvidia.com/compute/redist",
-    ],
     install_requires=deps,
     tests_require=test_deps,
     extras_require=extras,
