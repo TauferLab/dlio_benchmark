@@ -90,11 +90,16 @@ class TFFramework(Framework):
             self._configure_training(model)
 
     def _configure_training(self, model_type):
-        """Defaults for native classifiers; architecture PRs may specialize."""
+        """Select the native optimizer and logits loss for each architecture."""
         self._loss_function = tf.keras.losses.SparseCategoricalCrossentropy(
             from_logits=True
         )
-        self._optimizer = tf.keras.optimizers.SGD(learning_rate=0.1)
+        if model_type == Model.RESNET:
+            self._optimizer = tf.keras.optimizers.SGD(learning_rate=0.1)
+        elif model_type == Model.UNET:
+            self._optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+        else:
+            raise ValueError(f"Unsupported TensorFlow model: {model_type}")
 
     @dlp.log
     def init_loader(self, format_type, epoch=0, data_loader=None):
@@ -188,19 +193,135 @@ class TFFramework(Framework):
             return tf.experimental.dlpack.from_dlpack(value.__dlpack__())
         return tf.convert_to_tensor(value)
 
-    def _prepare_batch(self, batch):
-        """Convert a labeled batch without assuming an architecture or layout."""
+    def _prepare_resnet_batch(self, batch):
         inputs, target = self._split_batch(batch)
+        inputs = self._as_tensor(inputs)
+
+        if inputs.shape.rank == 2:
+            inputs = tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=-1)
+            inputs = tf.repeat(inputs, repeats=3, axis=-1)
+        elif inputs.shape.rank == 3:
+            inputs = tf.expand_dims(inputs, axis=-1)
+            inputs = tf.repeat(inputs, repeats=3, axis=-1)
+        elif inputs.shape.rank == 4:
+            if inputs.shape[-1] == 1:
+                inputs = tf.repeat(inputs, repeats=3, axis=-1)
+            elif inputs.shape[-1] != 3 and inputs.shape[1] in (1, 3):
+                inputs = tf.transpose(inputs, perm=(0, 2, 3, 1))
+                if inputs.shape[-1] == 1:
+                    inputs = tf.repeat(inputs, repeats=3, axis=-1)
+            elif inputs.shape[-1] != 3:
+                raise ValueError(
+                    "ResNet input must be BHW, BCHW, or BHWC with 1/3 channels; "
+                    f"got {inputs.shape}"
+                )
+        else:
+            raise ValueError(
+                f"ResNet input must have 2-4 dimensions; got {inputs.shape}"
+            )
+
+        if target is not None:
+            target = self._as_tensor(target)
+        inputs = tf.cast(inputs, tf.float32)
+
         if target is None:
-            raise ValueError("Native model training requires a target")
-        return tf.cast(self._as_tensor(inputs), tf.float32), tf.cast(
-            self._as_tensor(target), tf.int32
-        )
+            target = tf.zeros((tf.shape(inputs)[0],), dtype=tf.int32)
+        elif target.shape.rank == 2:
+            if target.shape[1] == 1:
+                target = target[:, 0]
+            else:
+                target = tf.argmax(target, axis=-1, output_type=tf.int32)
+        target = tf.cast(target, tf.int32)
+        return inputs, target
+
+    def _prepare_unet_batch(self, batch):
+        inputs, target = self._split_batch(batch)
+        inputs = self._as_tensor(inputs)
+
+        if inputs.shape.rank == 3:
+            inputs = tf.expand_dims(inputs, axis=1)
+            inputs = tf.expand_dims(inputs, axis=-1)
+        elif inputs.shape.rank == 4:
+            inputs = tf.expand_dims(inputs, axis=-1)
+        elif inputs.shape.rank == 5:
+            if inputs.shape[-1] != 1 and inputs.shape[1] == 1:
+                inputs = tf.transpose(inputs, perm=(0, 2, 3, 4, 1))
+            elif inputs.shape[-1] != 1:
+                raise ValueError(
+                    "UNet3D input must be BDHW, BCDHW, or BDHWC with one "
+                    f"channel; got {inputs.shape}"
+                )
+        else:
+            raise ValueError(
+                f"UNet3D input must have 3-5 dimensions; got {inputs.shape}"
+            )
+
+        if target is not None:
+            target = self._as_tensor(target)
+        inputs = tf.cast(inputs, tf.float32)
+
+        # Scalar DALI labels are not voxel masks, so use the same valid
+        # synthetic mask as input-only loaders.
+        if target is None or target.shape.rank <= 2:
+            target = tf.zeros(tf.shape(inputs)[:4], dtype=tf.int32)
+        else:
+            if target.shape.rank == 3:
+                target = tf.expand_dims(target, axis=1)
+            elif target.shape.rank == 5:
+                # TensorFlow's native layout is channel-last, so resolve
+                # depth-one NDHWC masks in favor of their trailing channel.
+                if target.shape[-1] == 1:
+                    target = target[..., 0]
+                elif target.shape[-1] == 3:
+                    target = tf.argmax(target, axis=-1, output_type=tf.int32)
+                elif target.shape[1] == 1:
+                    target = target[:, 0]
+                elif target.shape[1] == 3:
+                    target = tf.argmax(target, axis=1, output_type=tf.int32)
+                else:
+                    raise ValueError(
+                        "UNet3D target must have one label per voxel or "
+                        f"three class channels; got {target.shape}"
+                    )
+            elif target.shape.rank != 4:
+                raise ValueError(
+                    "UNet3D target must be BHW, BDHW, BCDHW, or BDHWC; "
+                    f"got {target.shape}"
+                )
+            target = tf.cast(target, tf.int32)
+        return inputs, target
+
+    def _prepare_batch(self, batch):
+        if self.model_type == Model.RESNET:
+            return self._prepare_resnet_batch(batch)
+        if self.model_type == Model.UNET:
+            return self._prepare_unet_batch(batch)
+        raise ValueError(f"Unsupported TensorFlow model: {self.model_type}")
+
+    @staticmethod
+    def _align_unet_target(prediction, target):
+        """Resize integer segmentation masks with nearest-neighbor sampling."""
+        target_shape = tf.shape(prediction)[1:4]
+
+        def resize_axis(tensor, axis, new_size):
+            old_size = tf.shape(tensor)[axis]
+            indices = tf.math.floordiv(
+                tf.range(new_size, dtype=tf.int32) * old_size,
+                new_size,
+            )
+            indices = tf.minimum(indices, old_size - 1)
+            return tf.gather(tensor, indices, axis=axis)
+
+        target = resize_axis(target, 1, target_shape[0])
+        target = resize_axis(target, 2, target_shape[1])
+        return resize_axis(target, 3, target_shape[2])
 
     def _train_batch(self, batch):
         inputs, target = self._prepare_batch(batch)
         with tf.GradientTape() as tape:
             prediction = self._model(inputs, training=True)
+            if self.model_type == Model.UNET:
+                target = self._align_unet_target(prediction, target)
             loss = self._loss_function(target, prediction)
 
         gradients = tape.gradient(loss, self._model.trainable_variables)

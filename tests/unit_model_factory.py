@@ -16,6 +16,16 @@ def test_pytorch_resnet_is_directly_callable():
     assert output.shape == (1, 1000)
 
 
+def test_tensorflow_resnet_is_directly_callable():
+    tf = pytest.importorskip("tensorflow")
+
+    model = ModelFactory.create_model(FrameworkType.TENSORFLOW, Model.RESNET)
+    output = model(tf.random.normal((1, 64, 64, 3)), training=False)
+
+    assert isinstance(model, tf.keras.Model)
+    assert output.shape == (1, 1000)
+
+
 @pytest.mark.parametrize("framework", list(FrameworkType))
 @pytest.mark.parametrize("model_type", [Model.DEFAULT, Model.SLEEP])
 def test_non_model_compute_types_return_none(framework, model_type):
