@@ -5,6 +5,7 @@ real epoch. The communication cases require a two-rank pytest invocation.
 """
 
 from pathlib import Path
+import socket
 import shutil
 import tempfile
 
@@ -31,6 +32,15 @@ def _run_native_benchmark(model_name, communication, monkeypatch):
     comm = MPI.COMM_WORLD
     if communication and comm.Get_size() < 2:
         pytest.skip("communication benchmark requires at least two MPI ranks")
+    if communication:
+        # A fresh rendezvous port keeps consecutive DDP model cases independent.
+        if comm.Get_rank() == 0:
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                port = listener.getsockname()[1]
+        else:
+            port = None
+        monkeypatch.setenv("MASTER_PORT", str(comm.bcast(port, root=0)))
 
     # Each test gets one shared filesystem root; both MPI ranks use the same
     # generated synthetic files, as in the actual benchmark.
