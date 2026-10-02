@@ -258,6 +258,9 @@ class ConfigArguments:
         )
 
     def configure_dftracer(self, is_child=False, use_pid=False):
+        # with "multiprocessing_context=fork" the profiler file remains open in the child process
+        if is_child and self.multiprocessing_context == "fork":
+            return
         # Configure the profiler
         if DFTRACER_ENABLE:
             dlp_trace = get_trace_name(self.output_folder, use_pid)

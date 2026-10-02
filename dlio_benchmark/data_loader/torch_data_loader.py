@@ -16,7 +16,6 @@
 """
 import math
 import pickle
-from multiprocessing.util import Finalize
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.sampler import Sampler
@@ -59,13 +58,17 @@ class TorchDataset(Dataset):
         _args = ConfigArguments.get_instance()
         _args.configure_dlio_logging(is_child=True)
         self.dlp_logger = _args.configure_dftracer(is_child=True, use_pid=True)
-        if self.dlp_logger and worker_id >= 0:
-            Finalize(None, self.dlp_logger.finalize, exitpriority=10)
         self.logger.debug(f"{utcnow()} worker initialized {worker_id} with format {self.format_type}")
         self.reader = ReaderFactory.get_reader(type=self.format_type,
                                                dataset_type=self.dataset_type,
                                                thread_index=worker_id,
                                                epoch_number=self.epoch_number)
+
+
+    def __del__(self):
+        if self.dlp_logger:
+            self.dlp_logger.finalize()
+
 
     @dlp.log
     def __len__(self):
