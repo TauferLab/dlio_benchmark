@@ -64,9 +64,11 @@ class TorchDataset(Dataset):
                                                thread_index=worker_id,
                                                epoch_number=self.epoch_number)
 
+
     def __del__(self):
         if self.dlp_logger:
             self.dlp_logger.finalize()
+
 
     @dlp.log
     def __len__(self):
