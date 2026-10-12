@@ -25,23 +25,34 @@ cd dlio_benchmark/
 pip install .[aistore]
 ```
 
-### PyTorch CPU or CUDA installation
-
-The base installation includes `pydftracer[dynamo]`, which requires PyTorch. To select a CPU-only PyTorch wheel, install it before DLIO:
+### Bare metal installation with profiler
 
 ```bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install .
+git clone https://github.com/argonne-lcf/dlio_benchmark
+cd dlio_benchmark/
+pip install .[pydftracer]
 ```
 
-For an explicit CUDA installation, use the `cuda` extra. First install a compatible CUDA PyTorch wheel using the [PyTorch installer](https://pytorch.org/get-started/locally/) (CUDA 12.4 example below), then install DLIO with the `cuda` extra. This extra also installs NVIDIA DALI:
+### PyTorch CUDA or ROCm installation
+
+Install DLIO with the accelerator extra for your GPU:
 
 ```bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
-python -m pip install '.[cuda]'
+python -m pip install '.[cuda]'  # NVIDIA: CUDA 12.4, includes DALI
+python -m pip install '.[rocm]'  # AMD: ROCm 6.2
 ```
 
-PyTorch wheel indexes are selected by the `pip` command, not by a package extra. Choose the index supported by your Python version and NVIDIA driver. The standard `pip install .` and `pip install -r requirements.txt` commands do not request DALI or a CUDA wheel index. Because `pydftracer[dynamo]` depends on PyTorch, preinstall the CPU wheel as shown above when you need to exclude transitive CUDA packages.
+These extras install PyTorch 2.5.1, torchvision 0.20.1, and torchaudio 2.5.1
+from the official PyTorch wheel URLs, without a separate PyTorch installation
+or index option. They support Linux x86_64 with CPython 3.9–3.12. Use one
+accelerator extra per environment; unsupported targets fail resolution rather
+than falling back to CPU wheels. Your GPU and driver must support the selected
+CUDA or ROCm version.
+
+The base install retains the original unpinned PyTorch dependencies. DALI is
+selected by the CUDA extra only. `requirements.txt` retains the original
+dependency list and indexes from `main`; use the extras above to select CUDA
+or ROCm.
 
 ## Container
 ```bash

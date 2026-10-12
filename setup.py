@@ -8,6 +8,7 @@ HYDRA_VERSION = "1.3.2"
 test_deps = [
     "pytest",
     "pytest-xdist",
+    "dftracer>=2.0.1",
 ]
 core_deps = [
     "Pillow>=9.3.0",
@@ -18,11 +19,14 @@ core_deps = [
     "omegaconf>=2.2.0",
     "pandas>=1.5.1",
     "psutil>=5.9.8",
-    "pydftracer[dynamo]>=2.0.3"
+    "pydftracer>=2.0.2"
 ]
 x86_deps = [
     f"hydra-core>={HYDRA_VERSION}",
     "tensorflow>=2.13.1",
+    "torch>=2.2.0",
+    "torchaudio",
+    "torchvision",
 ]
 ppc_deps = [
     f"hydra-core @ git+https://github.com/facebookresearch/hydra.git@v{HYDRA_VERSION}#egg=hydra-core"
@@ -35,12 +39,39 @@ if "ppc" in sysconfig.get_platform():
 else:
     deps.extend(x86_deps)
 
+# Extras cannot configure pip indexes. Direct wheel references select the
+# accelerator build even when a CPU build is already installed.
+def pytorch_deps(backend):
+    packages = {"torch": "2.5.1", "torchaudio": "2.5.1", "torchvision": "0.20.1"}
+    supported = (
+        'implementation_name == "cpython" and sys_platform == "linux" '
+        'and platform_machine == "x86_64" '
+        'and python_version >= "3.9" and python_version < "3.13"'
+    )
+    requirements = []
+    for package, version in packages.items():
+        for minor in range(9, 13):
+            tag = f"cp3{minor}"
+            requirements.append(
+                f"{package} @ https://download.pytorch.org/whl/{backend}/"
+                f"{package}-{version}%2B{backend}-{tag}-{tag}-linux_x86_64.whl"
+                f' ; {supported} and python_version == "3.{minor}"'
+            )
+    # Fail resolution on unsupported targets instead of silently selecting CPU.
+    requirements.append(
+        f'torch==2.5.1+{backend}; implementation_name != "cpython" '
+        'or sys_platform != "linux" or platform_machine != "x86_64" '
+        'or python_version < "3.9" or python_version >= "3.13"'
+    )
+    return requirements
+
+
 extras = {
     "test": test_deps,
-    "dftracer": [],  # Compatibility alias: pydftracer[dynamo] is in core_deps.
-    "cuda": [
-        "torch>=2.5.1",
-        "nvidia-dali-cuda120>=1.34.0",
+    "cuda": pytorch_deps("cu124") + ["nvidia-dali-cuda120>=1.34.0"],
+    "rocm": pytorch_deps("rocm6.2"),
+    "dftracer": [
+        "dftracer>=2.0.1",
     ],
     "s3": [
         "s3torchconnector",
@@ -100,6 +131,10 @@ setup(
         "dlio_benchmark.configs.hydra.job_logging": ["*.yaml"],
         "dlio_benchmark.configs.workload": ["*.yaml"],
     },
+    dependency_links=[
+        "https://download.pytorch.org/whl/cpu",
+        "https://developer.download.nvidia.com/compute/redist",
+    ],
     install_requires=deps,
     tests_require=test_deps,
     extras_require=extras,
