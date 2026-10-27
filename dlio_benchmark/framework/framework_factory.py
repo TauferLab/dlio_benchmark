@@ -25,6 +25,11 @@ class FrameworkFactory(object):
 
     @staticmethod
     def get_framework(framework_type, profiling, model: Model = Model.SLEEP, communication: bool = False):
+        if model == Model.LLAMA:
+            if framework_type != FrameworkType.PYTORCH:
+                raise ValueError("Native Llama training requires framework=pytorch")
+            from dlio_benchmark.framework.llama_framework import LlamaFramework
+            return LlamaFramework(profiling)
         if framework_type == FrameworkType.TENSORFLOW:
             from dlio_benchmark.framework.tf_framework import TFFramework
             return TFFramework.get_instance(profiling, model, communication)

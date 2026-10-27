@@ -1,0 +1,47 @@
+# Real pretrained training. Existing llama_8b_zero3 remains a synthetic workload.
+model:
+  name: llama
+framework: pytorch
+storage:
+  storage_type: parallel_fs
+  storage_root: ./
+workflow:
+  generate_data: true
+  train: true
+  evaluation: false
+  checkpoint: true
+  profiling: false
+dataset:
+  data_folder: data/llama-native
+reader:
+  batch_size: 1
+  batch_size_eval: 1
+train:
+  compute: true
+  communication: true
+  epochs: 1
+  total_training_steps: -1
+  seed: 123
+checkpoint:
+  checkpoint_folder: checkpoints/llama-native-fsdp
+  steps_between_checkpoints: 2
+  fsync: true
+llama:
+  backend: fsdp
+  data_source: dlio_tokens
+  model_name_or_path: meta-llama/Llama-3.1-8B
+  model_revision: d04e592bb4f6aa9cfee91e2e20afa771667e1d4b
+  local_files_only: false
+  sequence_length: 128
+  precision: bf16
+  attention_implementation: sdpa
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-5
+  weight_decay: 0.1
+  max_grad_norm: 1.0
+  activation_checkpointing: true
+  generated_samples: 128
+  generated_eval_samples: 16
+  samples_per_file: 64
+  resume_from: ""
+  save_final: true

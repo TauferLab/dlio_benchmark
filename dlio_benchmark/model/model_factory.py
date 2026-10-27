@@ -5,7 +5,7 @@ from dlio_benchmark.common.enumerations import FrameworkType, Model
 
 class ModelFactory:
     @staticmethod
-    def create_model(framework: FrameworkType, model_type: Model):
+    def create_model(framework: FrameworkType, model_type: Model, **kwargs):
         """Return a raw ``torch.nn.Module`` or ``tf.keras.Model``.
 
         Device placement, distributed wrapping, optimization, and training are
@@ -15,14 +15,19 @@ class ModelFactory:
             return None
 
         if framework == FrameworkType.PYTORCH:
-            return ModelFactory.create_pytorch_model(model_type)
+            return ModelFactory.create_pytorch_model(model_type, **kwargs)
         if framework == FrameworkType.TENSORFLOW:
             return ModelFactory.create_tensorflow_model(model_type)
         raise ValueError(f"Unsupported framework: {framework}")
 
     @staticmethod
-    def create_pytorch_model(model_type: Model):
+    def create_pytorch_model(model_type: Model, **kwargs):
         """Return a native PyTorch model, importing only the PyTorch backend."""
+        if model_type == Model.LLAMA:
+            if "config" not in kwargs:
+                raise ValueError("Native Llama construction requires validated configuration and backend setup")
+            from dlio_benchmark.model.pytorch.llama import load_pretrained_llama
+            return load_pretrained_llama(**kwargs)
         if model_type == Model.RESNET:
             from dlio_benchmark.model.pytorch.resnet import ResNet50
 

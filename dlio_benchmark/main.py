@@ -69,6 +69,15 @@ class DLIOBenchmark(object):
         t0 = time()
         self.args = ConfigArguments.get_instance()
         LoadConfig(self.args, cfg)
+        self._native_llama = None
+        if self.args.model == Model.LLAMA:
+            from dlio_benchmark.llama.benchmark import LlamaBenchmark
+            self._native_llama = LlamaBenchmark(
+                self.args, cfg, initialize_tracer=dftracer_initialize,
+                finalize_tracer=dftracer_finalize,
+            )
+            self.framework = self._native_llama.framework
+            return
 
         self.output_folder = self.args.output_folder
         os.makedirs(self.args.output_folder, mode=0o755, exist_ok=True)
@@ -157,6 +166,8 @@ class DLIOBenchmark(object):
         - It generates the required data
         - Start profiling session for Darshan and Tensorboard.
         """
+        if self._native_llama is not None:
+            return self._native_llama.initialize()
         self.comm.barrier()
 
         if self.args.generate_data:
@@ -407,6 +418,8 @@ class DLIOBenchmark(object):
         On each epoch, it prepares dataset for reading, it trains, and finalizes the dataset.
         If evaluation is enabled, it reads the eval dataset, performs evaluation and finalizes.
         """
+        if self._native_llama is not None:
+            return self._native_llama.run()
         self.stats.start_run()
         if (not self.generate_only) and (not self.args.checkpoint_only):
             # Print out the expected number of steps for each epoch and evaluation
@@ -464,6 +477,9 @@ class DLIOBenchmark(object):
 
         global dftracer, dftracer_initialize, dftracer_finalize
 
+        if self._native_llama is not None:
+            return self._native_llama.finalize()
+
         self.framework.finalize()
         self.comm.barrier()
         if self.checkpointing_mechanism:
@@ -501,7 +517,10 @@ def run_benchmark(cfg: DictConfig):
         # The full benchmark finalizer assumes initialization completed.
         # Preserve the primary failure even if local group teardown also fails.
         try:
-            benchmark.framework.finalize()
+            if benchmark.args.model == Model.LLAMA:
+                benchmark._native_llama.abort()
+            else:
+                benchmark.framework.finalize()
         except Exception:
             pass
         raise

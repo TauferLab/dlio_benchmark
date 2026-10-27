@@ -43,6 +43,22 @@ python -m pip install '.[cuda]'
 
 PyTorch wheel indexes are selected by the `pip` command, not by a package extra. Choose the index supported by your Python version and NVIDIA driver. The standard `pip install .` and `pip install -r requirements.txt` commands do not request DALI or a CUDA wheel index. Because `pydftracer[dynamo]` depends on PyTorch, preinstall the CPU wheel as shown above when you need to exclude transitive CUDA packages.
 
+### Native Llama training
+
+Real pretrained Llama 3.1 8B training is available through the optional `llama`
+and `llama-deepspeed` extras. Install the platform's PyTorch 2.9.1 wheel first,
+then explicitly select the extra:
+
+```bash
+pip install '.[llama]'            # FSDP2
+pip install '.[llama-deepspeed]'  # DeepSpeed ZeRO 2 or 3
+mpirun -np 4 dlio_benchmark workload=llama_native_fsdp
+```
+
+New Llama dependencies are excluded from the base installation. See the
+[native Llama guide](docs/source/llama.rst) for model access, OpenHermes,
+loss objectives, checkpoint/resume, tracing, and qualification limits.
+
 ## Container
 ```bash
 git clone https://github.com/argonne-lcf/dlio_benchmark
