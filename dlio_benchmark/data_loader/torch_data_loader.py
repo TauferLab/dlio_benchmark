@@ -16,6 +16,7 @@
 """
 import math
 import pickle
+from multiprocessing.util import Finalize
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.sampler import Sampler
@@ -49,6 +50,7 @@ class TorchDataset(Dataset):
         self.serial_args = pickle.dumps(args)
         self.logger = args.logger
         self.dlp_logger = None
+        self._dftracer_finalizer = None
         if num_workers == 0:
             self.worker_init(-1)
 
@@ -58,6 +60,12 @@ class TorchDataset(Dataset):
         _args = ConfigArguments.get_instance()
         _args.configure_dlio_logging(is_child=True)
         self.dlp_logger = _args.configure_dftracer(is_child=True, use_pid=True)
+        if self.dlp_logger and worker_id >= 0:
+            # Spawn workers exit through multiprocessing, which does not run
+            # ordinary atexit callbacks or guarantee Dataset.__del__.
+            self._dftracer_finalizer = Finalize(
+                None, self.dlp_logger.finalize, exitpriority=10
+            )
         self.logger.debug(f"{utcnow()} worker initialized {worker_id} with format {self.format_type}")
         self.reader = ReaderFactory.get_reader(type=self.format_type,
                                                dataset_type=self.dataset_type,
@@ -65,13 +73,17 @@ class TorchDataset(Dataset):
                                                epoch_number=self.epoch_number)
 
     def __del__(self):
-        if self.dlp_logger:
+        finalizer = getattr(self, '_dftracer_finalizer', None)
+        if finalizer is not None:
+            finalizer()
+        elif getattr(self, 'dlp_logger', None):
             self.dlp_logger.finalize()
 
     @dlp.log
     def __len__(self):
         return self.num_samples
 
+    @dlp.log
     def __getitem__(self, image_idx):
         self.num_images_read += 1
         step = int(math.ceil(self.num_images_read / self.batch_size))
@@ -175,4 +187,10 @@ class TorchDataLoader(BaseDataLoader):
 
     @dlp.log
     def finalize(self):
-        pass
+        # Close persistent workers while Python is still running, so their
+        # multiprocessing finalizers can flush the DFTracer buffers.
+        dataset = getattr(self, '_dataset', None)
+        iterator = getattr(dataset, '_iterator', None)
+        if iterator is not None:
+            iterator._shutdown_workers()
+            self._dataset._iterator = None
