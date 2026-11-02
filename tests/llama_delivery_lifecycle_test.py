@@ -155,3 +155,25 @@ def test_worker_tracing_spec_is_picklable_for_spawn(harness):
     spec = WorkerTracing.from_current_config()
     assert pickle.loads(pickle.dumps(spec)).serial_args == spec.serial_args
     WorkerTracing(None)(0)  # no tracing spec: a worker does nothing
+
+
+def test_each_fetch_is_marked_with_the_optimizer_step_it_feeds(harness, monkeypatch):
+    """The analysis numbers steps from fetch.iter's step; it must be set before the fetch, 1-based."""
+    run, _ = harness
+    from dlio_benchmark.llama import benchmark as bm
+    events = []
+    real_update, real_fetch = bm.dft_ai.update, bm.LlamaBenchmark._fetch
+
+    def update(**kwargs):
+        if "step" in kwargs:
+            events.append(("step", kwargs["step"]))
+        return real_update(**kwargs)
+
+    def fetch(self, loader):
+        events.append(("fetch",))
+        return real_fetch(self, loader)
+
+    monkeypatch.setattr(bm.dft_ai, "update", update)
+    monkeypatch.setattr(bm.LlamaBenchmark, "_fetch", fetch)
+    run("marked", MODES["disk"], STEPS)
+    assert events == [item for k in range(1, STEPS + 1) for item in (("step", k), ("fetch",))]

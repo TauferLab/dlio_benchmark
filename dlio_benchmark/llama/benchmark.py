@@ -394,13 +394,29 @@ class LlamaBenchmark:
                 return str(manifest)
         return self.root_call(prepare)
 
-    @dft_ai.dataloader.fetch
-    def fetch_window(self, loader):
+    def _fetch(self, loader):
         if self.config.host_sync == "step":
             # No cross-rank error exchange: a failure here surfaces on the other ranks as a
             # collective timeout (llama.distributed_timeout_seconds). See LLAMA_TODO L09.4.
             return loader.window()
         return self.local_call(loader.window)
+
+    @dft_ai.dataloader.fetch
+    def fetch_window(self, loader):
+        return self._fetch(loader)
+
+    def _windows(self, loader, runtime, limit):
+        """Training windows in order. Each next() is one fetch, so the DFTracer ``fetch.iter``
+        span that wraps this generator is the time the rank waited for data, the same marker the
+        image loaders emit; the step it carries is the optimizer step the window feeds (1-based)."""
+        while loader.cursor < loader.num_batches:
+            if limit > 0 and runtime.optimizer_steps >= limit:
+                return
+            dft_ai.update(step=runtime.optimizer_steps + 1)
+            before_bytes = loader.dataset.bytes_read
+            started = perf_counter()
+            batches = self._fetch(loader)
+            yield batches, perf_counter() - started, before_bytes
 
     @dft_ai.pipeline.train
     def run(self):
@@ -421,20 +437,14 @@ class LlamaBenchmark:
             dft_ai.update(epoch=epoch)
             # Never dispatch (or prefetch) more windows than a global step limit will consume.
             loader.limit_windows(max(0, limit - runtime.optimizer_steps) if limit > 0 else None)
-            while loader.cursor < loader.num_batches:
-                if limit > 0 and runtime.optimizer_steps >= limit:
-                    break
-                started = perf_counter()
-                before_bytes = loader.dataset.bytes_read
-                batches = self.fetch_window(loader)
-                fetch_time = perf_counter() - started
+            for batches, fetch_time, before_bytes in dft_ai.dataloader.fetch.iter(
+                    self._windows(loader, runtime, limit)):
                 if self.config.host_sync != "step":
                     runtime.synchronize()
                 compute_started = perf_counter()
                 result = self.framework.compute(batches, epoch, runtime.optimizer_steps + 1)
                 compute_time = perf_counter() - compute_started
                 loader.commit_window()
-                dft_ai.update(step=runtime.optimizer_steps)
                 self.stats.windows.append(dict(result, epoch=epoch,
                     cursor=loader.cursor, fetch_seconds=fetch_time, compute_seconds=compute_time,
                     application_read_bytes=loader.dataset.bytes_read - before_bytes,
