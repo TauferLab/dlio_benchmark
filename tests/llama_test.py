@@ -429,3 +429,64 @@ def test_dlio_entry_lifecycle_with_local_tiny_runtime(tmp_path, monkeypatch, tin
     finally:
         ConfigArguments.reset()
         set_dftracer_initialize(True); set_dftracer_finalize(True)
+
+
+def test_host_sync_setting_is_validated():
+    assert config().host_sync == "microbatch"
+    assert config(host_sync="step").host_sync == "step"
+    with pytest.raises(ValueError, match="host_sync"):
+        config(host_sync="window")
+
+
+@pytest.mark.parametrize("max_grad_norm", [0, 1.0])
+def test_step_mode_matches_microbatch_mode(tiny, loader, torch, max_grad_norm):
+    strict = make_runtime(torch, deepcopy(tiny), config(max_grad_norm=max_grad_norm))
+    step = make_runtime(torch, deepcopy(tiny), config(max_grad_norm=max_grad_norm, host_sync="step"))
+    for runtime in (strict, step):
+        runtime.optimizer = torch.optim.SGD(runtime.model.parameters(), lr=0.01)
+    batches = loader.window()
+    batches[0]["labels"][0, 4:] = -100  # unequal valid-target counts across microbatches
+    expected = strict.train_window(batches)
+    actual = step.train_window(batches)
+    assert actual["loss"] == pytest.approx(expected["loss"], rel=1e-6)
+    assert actual["valid_tokens"] == expected["valid_tokens"]
+    for got, want in zip(step.model.parameters(), strict.model.parameters()):
+        torch.testing.assert_close(got, want, rtol=1e-5, atol=1e-7)
+    assert step.progress() == strict.progress()
+    assert ("grad_norm" in actual) and (actual["grad_norm"] > 0) == bool(max_grad_norm)
+
+
+def test_step_mode_reads_the_device_once_per_optimizer_step(tiny, loader, torch, monkeypatch):
+    runtime = make_runtime(torch, tiny, config(host_sync="step"))
+    # SGD never reads tensors on the host; Adam's step counter would add unrelated item() calls.
+    runtime.optimizer = torch.optim.SGD(runtime.model.parameters(), lr=0.01)
+    batches = loader.window()
+    reads = {"item": 0, "tolist": 0}
+    item, tolist = torch.Tensor.item, torch.Tensor.tolist
+
+    def counted(name, original):
+        def wrapper(self, *args, **kwargs):
+            reads[name] += 1
+            return original(self, *args, **kwargs)
+        return wrapper
+
+    monkeypatch.setattr(torch.Tensor, "item", counted("item", item))
+    monkeypatch.setattr(torch.Tensor, "tolist", counted("tolist", tolist))
+    runtime.train_window(batches)
+    assert reads == {"item": 0, "tolist": 1}
+
+
+@pytest.mark.parametrize("host_sync", ["microbatch", "step"])
+def test_nonfinite_loss_is_rejected_before_any_update(tiny, loader, torch, host_sync):
+    model = deepcopy(tiny)
+    with torch.no_grad():
+        model.model.embed_tokens.weight[0, 0] = float("nan")
+    runtime = make_runtime(torch, model, config(host_sync=host_sync, max_grad_norm=1.0))
+    before = [p.detach().clone() for p in model.parameters()]
+    batches = loader.window()
+    batches[0]["input_ids"][0, 0] = 0  # make the NaN embedding row reach the loss
+    with pytest.raises(FloatingPointError):
+        runtime.train_window(batches)
+    for actual, expected in zip(model.parameters(), before):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+    assert runtime.optimizer_steps == 0 and runtime.applied_updates == 0

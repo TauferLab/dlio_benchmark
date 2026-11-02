@@ -195,9 +195,25 @@ class TorchRuntime:
             dist.all_reduce(tensor)
         return tensor.item()
 
+    @property
+    def step_sync(self):
+        return self.config.host_sync == "step"
+
+    def device_value(self, value):
+        # A fill kernel, unlike torch.tensor(value, device=...), does not copy from the host.
+        return torch.full((), float(value), dtype=torch.float64, device=self.device)
+
+    def all_reduce_async(self, tensor, op=None):
+        """Reduce on the device without reading the result on the host."""
+        if dist.is_initialized():
+            dist.all_reduce(tensor, op=op or dist.ReduceOp.SUM)
+        return tensor
+
     @dft_ai.device.transfer
     def transfer(self, batch):
-        return {key: batch[key].to(self.device) for key in ("input_ids", "attention_mask", "labels")}
+        # Blocking copies wait for the stream to drain; step mode lets the host run ahead.
+        return {key: batch[key].to(self.device, non_blocking=self.step_sync)
+                for key in ("input_ids", "attention_mask", "labels")}
 
     @dft_ai.compute.forward
     def forward_loss(self, batch):
@@ -213,6 +229,8 @@ class TorchRuntime:
         valid = [int((batch["labels"][:, 1:] != -100).sum()) for batch in batches]
         if not all(valid):
             raise ValueError("Every microbatch must contain a causal prediction target")
+        if self.step_sync:
+            return self._train_window_step(batches, valid)
         total = self.reduce_sum(sum(valid))
         self.model.train()
         self.optimizer.zero_grad(set_to_none=True)
@@ -239,6 +257,50 @@ class TorchRuntime:
         self.optimizer.zero_grad(set_to_none=True)
         self.synchronize()
         return {"loss": self.reduce_sum(loss_sum) / total, "valid_tokens": int(total),
+                "optimizer_steps": self.optimizer_steps, "applied_updates": self.applied_updates}
+
+    def _train_window_step(self, batches, valid):
+        """Same update as train_window, with one host read per optimizer step.
+
+        Losses, finiteness and target counts stay on the device. The single read
+        happens after backward and before optimizer.step(), so a nonfinite loss or
+        gradient on any rank still stops training before the weights change.
+        """
+        total = self.all_reduce_async(self.device_value(sum(valid)))
+        self.model.train()
+        self.optimizer.zero_grad(set_to_none=True)
+        loss_sum = self.device_value(0)
+        finite = self.device_value(1)
+        for index, (batch, count) in enumerate(zip(batches, valid)):
+            boundary = index == len(batches) - 1
+            if hasattr(self.model, "set_requires_gradient_sync"):
+                self.model.set_requires_gradient_sync(boundary)
+            loss = self.forward_loss(self.transfer(batch))
+            finite = torch.minimum(finite, torch.isfinite(loss.detach()).double())
+            loss_sum = loss_sum + loss.detach().double() * count
+            self.backward(loss * (count * self.world_size / total).to(loss.dtype), boundary)
+            self.microbatches += 1
+        # As in the microbatch mode, gradients are inspected only when clipping is on.
+        # The norm stays on the device; a nonfinite norm is caught by the read below.
+        norm = self.device_value(0)
+        if self.config.max_grad_norm:
+            norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm,
+                                                  foreach=False)
+            if hasattr(norm, "full_tensor"):
+                norm = norm.full_tensor()
+        self.all_reduce_async(finite, dist.ReduceOp.MIN if dist.is_initialized() else None)
+        self.all_reduce_async(loss_sum)
+        grad_norm, all_finite, loss_total, targets = torch.stack(
+            [norm.double(), finite, loss_sum, total]).tolist()
+        if all_finite < 1 or not math.isfinite(grad_norm):
+            raise FloatingPointError("Nonfinite causal loss or gradient norm on at least one rank")
+        self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
+        self.optimizer_steps += 1
+        self.applied_updates += 1
+        self.optimizer.zero_grad(set_to_none=True)
+        return {"loss": loss_total / targets, "valid_tokens": int(targets), "grad_norm": grad_norm,
                 "optimizer_steps": self.optimizer_steps, "applied_updates": self.applied_updates}
 
     @torch.no_grad()
@@ -323,6 +385,8 @@ class DeepSpeedRuntime(TorchRuntime):
         valid = [int((batch["labels"][:, 1:] != -100).sum()) for batch in batches]
         if not all(valid):
             raise ValueError("Every microbatch must contain a prediction target")
+        if self.step_sync:
+            return self._train_window_step(batches, valid)
         total = self.reduce_sum(sum(valid))
         self.model.train()
         loss_sum = 0.0
@@ -349,7 +413,49 @@ class DeepSpeedRuntime(TorchRuntime):
         return {"loss": self.reduce_sum(loss_sum) / total, "valid_tokens": int(total),
                 "optimizer_steps": self.optimizer_steps, "applied_updates": self.applied_updates}
 
+    def _train_window_step(self, batches, valid):
+        """One host read per optimizer step, taken before the engine applies the update.
+
+        DeepSpeed clips inside engine.step(), so this checks the losses of every
+        microbatch on every rank, as the microbatch mode does, just later.
+        """
+        total = self.all_reduce_async(self.device_value(sum(valid)))
+        self.model.train()
+        state = {"loss_sum": self.device_value(0), "finite": self.device_value(1)}
+        skipped_before = self.model.skipped_steps
+        steps_before = self.model.global_steps
+
+        def check_before_update():
+            self.all_reduce_async(state["finite"], dist.ReduceOp.MIN if dist.is_initialized() else None)
+            self.all_reduce_async(state["loss_sum"])
+            all_finite, loss_total, targets = torch.stack(
+                [state["finite"], state["loss_sum"], total]).tolist()
+            if all_finite < 1:
+                raise FloatingPointError("Nonfinite causal loss on at least one rank")
+            state.update(loss=loss_total / targets, valid_tokens=int(targets))
+
+        for index, (batch, count) in enumerate(zip(batches, valid)):
+            boundary = self.model.is_gradient_accumulation_boundary()
+            if boundary != (index == len(batches) - 1):
+                raise RuntimeError("DLIO and DeepSpeed accumulation counters disagree")
+            loss = self.forward_loss(self.transfer(batch))
+            state["finite"] = torch.minimum(state["finite"], torch.isfinite(loss.detach()).double())
+            state["loss_sum"] = state["loss_sum"] + loss.detach().double() * count
+            # DeepSpeed backward divides by accumulation once internally.
+            scale = (count * self.world_size * len(batches) / total).to(loss.dtype)
+            self.backward(loss * scale, boundary, check_before_update if boundary else None)
+            self.microbatches += 1
+        boundaries = self.model.global_steps - steps_before
+        if boundaries != 1:
+            raise RuntimeError("Expected one DeepSpeed optimizer boundary per window")
+        self.optimizer_steps += boundaries
+        self.applied_updates += boundaries - (self.model.skipped_steps - skipped_before)
+        return {"loss": state["loss"], "valid_tokens": state["valid_tokens"],
+                "optimizer_steps": self.optimizer_steps, "applied_updates": self.applied_updates}
+
     @dft_ai.compute.backward
-    def backward(self, loss, boundary):
+    def backward(self, loss, boundary, before_update=None):
         self.model.backward(loss)
+        if before_update is not None:
+            before_update()
         self.model.step()

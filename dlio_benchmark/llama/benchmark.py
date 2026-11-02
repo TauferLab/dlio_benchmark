@@ -308,6 +308,10 @@ class LlamaBenchmark:
 
     @dft_ai.dataloader.fetch
     def fetch_window(self, loader):
+        if self.config.host_sync == "step":
+            # No cross-rank error exchange: a failure here surfaces on the other ranks as a
+            # collective timeout (llama.distributed_timeout_seconds). See LLAMA_TODO L09.4.
+            return loader.window()
         return self.local_call(loader.window)
 
     @dft_ai.pipeline.train
@@ -334,7 +338,8 @@ class LlamaBenchmark:
                 before_bytes = loader.dataset.bytes_read
                 batches = self.fetch_window(loader)
                 fetch_time = perf_counter() - started
-                runtime.synchronize()
+                if self.config.host_sync != "step":
+                    runtime.synchronize()
                 compute_started = perf_counter()
                 result = self.framework.compute(batches, epoch, runtime.optimizer_steps + 1)
                 compute_time = perf_counter() - compute_started

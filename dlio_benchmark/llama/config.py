@@ -41,6 +41,10 @@ class LlamaConfig:
     resume_from: str = ""
     save_final: bool = True
     distributed_timeout_seconds: int = 300
+    # microbatch: check every microbatch loss across ranks, blocking copies and
+    # window-level synchronization. step: one host read per optimizer step,
+    # before the update, so the host can queue work ahead of the GPU.
+    host_sync: str = "microbatch"
 
     @classmethod
     def from_mapping(cls, mapping):
@@ -85,6 +89,8 @@ class LlamaConfig:
             raise ValueError("Generated token data supports full causal loss")
         if self.packing_remainder not in {"pad", "drop"}:
             raise ValueError("packing_remainder must be pad or drop")
+        if self.host_sync not in {"microbatch", "step"}:
+            raise ValueError("llama.host_sync must be microbatch or step")
 
     def to_dict(self):
         return asdict(self)
