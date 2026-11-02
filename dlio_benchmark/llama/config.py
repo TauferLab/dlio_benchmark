@@ -45,6 +45,9 @@ class LlamaConfig:
     # window-level synchronization. step: one host read per optimizer step,
     # before the update, so the host can queue work ahead of the GPU.
     host_sync: str = "microbatch"
+    # offline: tokenize once during preparation. online: the loader workers tokenize raw
+    # OpenHermes text on every read (needs packing=false; see llama/online.py).
+    tokenization: str = "offline"
 
     @classmethod
     def from_mapping(cls, mapping):
@@ -91,6 +94,10 @@ class LlamaConfig:
             raise ValueError("packing_remainder must be pad or drop")
         if self.host_sync not in {"microbatch", "step"}:
             raise ValueError("llama.host_sync must be microbatch or step")
+        if self.tokenization not in {"offline", "online"}:
+            raise ValueError("llama.tokenization must be offline or online")
+        if self.tokenization == "online" and (self.data_source != "openhermes" or self.packing):
+            raise ValueError("llama.tokenization=online needs data_source=openhermes and packing=false")
 
     def to_dict(self):
         return asdict(self)
