@@ -94,6 +94,7 @@ def main():
             precision=os.environ.get("DLIO_LLAMA_TEST_PRECISION", "fp32"),
             attention_implementation="eager", gradient_accumulation_steps=2,
             learning_rate=0.001, max_grad_norm=1.0, activation_checkpointing=True,
+            host_sync=os.environ.get("DLIO_LLAMA_TEST_HOST_SYNC", "microbatch"),
         ))
         torch.manual_seed(123 + rank)
         from transformers import AutoConfig, AutoModelForCausalLM
@@ -146,6 +147,9 @@ def main():
             checkpoint.save_checkpoint(loader)
             sample_ids = [batch["sample_ids"] for batch in loader.window()]
             result = runtime.train_window(loader.window()); loader.commit_window()
+            # the FSDP/plain step path returns its gradient norm; DeepSpeed clips inside the engine
+            if not args.backend.startswith("deepspeed"):
+                assert ("grad_norm" in result) == (options.host_sync == "step"), result
             expected = {"parameters": parameter_snapshot(runtime, args.backend),
                         "progress": runtime.progress(), "result": result,
                         "sample_ids": sample_ids,
@@ -157,6 +161,9 @@ def main():
             expected = torch.load(folder / f"expected-{rank}.pt", weights_only=False)
             assert [batch["sample_ids"] for batch in loader.window()] == expected["sample_ids"]
             result = runtime.train_window(loader.window()); loader.commit_window()
+            # the FSDP/plain step path returns its gradient norm; DeepSpeed clips inside the engine
+            if not args.backend.startswith("deepspeed"):
+                assert ("grad_norm" in result) == (options.host_sync == "step"), result
             actual = parameter_snapshot(runtime, args.backend)
             assert actual.keys() == expected["parameters"].keys()
             for name in actual:

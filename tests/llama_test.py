@@ -342,10 +342,22 @@ def test_deepspeed_configuration_resolves_batch_size_and_rejects_auto():
                                  deepspeed_config={"zero_optimization": {"reduce_bucket_size": "auto"}}), 2, 2)
 
 
-@pytest.mark.parametrize("backend,precision", [("torch", "fp32"), ("fsdp", "fp32"),
-    ("deepspeed2", "fp32"), ("deepspeed3", "fp32"), ("fsdp", "bf16"),
-    ("deepspeed2", "bf16"), ("deepspeed3", "bf16")])
+BACKEND_MATRIX = [("torch", "fp32"), ("fsdp", "fp32"), ("deepspeed2", "fp32"), ("deepspeed3", "fp32"),
+                  ("fsdp", "bf16"), ("deepspeed2", "bf16"), ("deepspeed3", "bf16")]
+
+
+@pytest.mark.parametrize("backend,precision", BACKEND_MATRIX)
 def test_fresh_process_backend_resume(tmp_path, tiny, backend, precision, torch):
+    run_fresh_process_resume(tmp_path, tiny, backend, precision, torch, "microbatch")
+
+
+@pytest.mark.parametrize("backend,precision", BACKEND_MATRIX)
+def test_fresh_process_backend_resume_in_step_mode(tmp_path, tiny, backend, precision, torch):
+    """Real FSDP2 (DTensor gradient norm) and DeepSpeed (pre-update check) with one device read per step."""
+    run_fresh_process_resume(tmp_path, tiny, backend, precision, torch, "step")
+
+
+def run_fresh_process_resume(tmp_path, tiny, backend, precision, torch, host_sync):
     if backend.startswith("deepspeed"):
         pytest.importorskip("deepspeed")
     tiny.save_pretrained(tmp_path / "model", max_shard_size="3KB")
@@ -360,7 +372,7 @@ def test_fresh_process_backend_resume(tmp_path, tiny, backend, precision, torch)
     command += [str(worker), str(tmp_path), backend]
     environment = dict(os.environ, DFTRACER_ENABLE="0", GLOO_SOCKET_IFNAME="lo",
                        DS_ACCELERATOR=device, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
-                       DLIO_LLAMA_TEST_PRECISION=precision)
+                       DLIO_LLAMA_TEST_PRECISION=precision, DLIO_LLAMA_TEST_HOST_SYNC=host_sync)
     environment["PYTHONPATH"] = str(Path(__file__).parents[1]) + os.pathsep + environment.get("PYTHONPATH", "")
     environment["PATH"] = str(Path(sys.executable).parent) + os.pathsep + environment.get("PATH", "")
     for phase in ("save", "load"):
