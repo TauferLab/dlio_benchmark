@@ -118,6 +118,8 @@ def load_hf_tokenizer(source, revision, local_files_only):
 class OnlineTokenProvider:
     """Record ``i`` = tokenization of raw example ``examples[i]``, done on every read."""
 
+    online = True
+
     def __init__(self, raw_path, split, manifest, examples, tokenizer_loader):
         self.raw_path, self.split = str(raw_path), split
         self.manifest, self.examples = manifest, examples

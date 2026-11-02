@@ -530,7 +530,13 @@ def _builder(source_class):
     return build
 
 
-register_token_loader(DataLoaderType.PYTORCH, _builder(DiskTokenDataset))
+def _pytorch_builder(provider, settings, **sampling):
+    # Online tokenization runs in the pytorch loader; it gets its own event name for the trace.
+    source = OnlineTokenDataset if getattr(provider, "online", False) else DiskTokenDataset
+    return _builder(source)(provider, settings, **sampling)
+
+
+register_token_loader(DataLoaderType.PYTORCH, _pytorch_builder)
 register_token_loader(DataLoaderType.LOAD_MEM, _builder(RamTokenDataset))
 register_token_loader(DataLoaderType.SYNTHETIC, _builder(GeneratedTokenDataset))
 

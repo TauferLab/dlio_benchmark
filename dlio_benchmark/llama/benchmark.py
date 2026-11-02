@@ -13,13 +13,14 @@ from time import perf_counter, sleep
 import numpy as np
 from omegaconf import OmegaConf
 
-from dlio_benchmark.common.enumerations import DatasetType, FrameworkType, Model, StorageType
+from dlio_benchmark.common.enumerations import (DataLoaderType, DatasetType, FrameworkType, Model,
+                                               StorageType)
 from dlio_benchmark.framework.framework_factory import FrameworkFactory
 from dlio_benchmark.llama.config import LlamaConfig, check_dependencies
-from dlio_benchmark.llama.data import (TokenDataset, TokenLoader, fingerprint, generate_tokens,
+from dlio_benchmark.llama.data import (TokenDataset, fingerprint, generate_tokens,
                                       prepare_openhermes)
 from dlio_benchmark.utils.llama_stats import LlamaStats
-from dlio_benchmark.utils.utility import DLIOMPI, dft_ai
+from dlio_benchmark.utils.utility import DFTRACER_ENABLE, DLIOMPI, dft_ai
 
 
 def local_asset_identity(source, weights=True):
@@ -62,6 +63,13 @@ class LlamaBenchmark:
         self.comm, self.rank, self.world_size = self.mpi.comm(), self.mpi.rank(), self.mpi.size()
         args.comm = self.comm
         self._validate_workflow(values)
+        # Only explicit workload.reader settings count; ConfigArguments' image defaults
+        # (TensorFlow loader, one worker, a one-second delay, pinning) never reach Llama.
+        from dlio_benchmark.data_loader.token_loader import resolve_delivery
+        self.delivery = resolve_delivery(values.get("reader"), self.config.data_source,
+                                         self.config.tokenization, self.config.packing,
+                                         self.config.distributed_timeout_seconds)
+        args.multiprocessing_context = self.delivery.multiprocessing_context  # worker tracing needs a non-fork start
         Path(args.output_folder).mkdir(parents=True, exist_ok=True)
         args.configure_dlio_logging()
         self.logger = args.logger
@@ -196,24 +204,35 @@ class LlamaBenchmark:
                               "formatter": self.config.conversation_format, "loss": self.config.loss,
                               "packing": self.config.packing, "remainder": self.config.packing_remainder,
                               "max_samples": self.config.max_samples}
-        train_manifest = self._prepare_split("train", self.config.dataset_split,
-                                             self.config.generated_samples)
+        self.tokenizer_source, self.tokenizer_revision = tokenizer_source, tokenizer_revision
+        sources = [self._prepare_source("train", self.config.dataset_split,
+                                        self.config.generated_samples, self.args.seed)]
         if self.args.do_eval:
-            eval_manifest = self._prepare_split("valid", self.config.eval_split,
-                                                self.config.generated_eval_samples)
+            sources.append(self._prepare_source("valid", self.config.eval_split,
+                                                self.config.generated_eval_samples, self.args.seed + 1))
         if self.generation_only:
             self.stats.summary["preparation_seconds"] = perf_counter() - started
             return
-        dataset = self.local_call(lambda: TokenDataset(train_manifest))
-        self.train_loader = TokenLoader(dataset, self.args.batch_size, self.rank, self.world_size,
-                                       self.config.gradient_accumulation_steps, self.args.seed)
+        # Preload (RAM mode) happens here, before any GPU allocation and outside timed training.
+        preload_started = perf_counter()
+        providers = self._build_providers(sources)
+        self.train_loader = self._build_loader(providers[0], self.args.batch_size,
+                                               self.config.gradient_accumulation_steps, self.args.seed)
         self.train_loader.set_epoch(1)
         self.framework.readers[DatasetType.TRAIN] = self.train_loader
         if self.args.do_eval:
-            eval_dataset = self.local_call(lambda: TokenDataset(eval_manifest))
-            self.eval_loader = TokenLoader(eval_dataset, self.args.batch_size_eval, self.rank,
-                                          self.world_size, 1, self.args.seed + 1)
+            self.eval_loader = self._build_loader(providers[1], self.args.batch_size_eval, 1, self.args.seed + 1)
             self.framework.readers[DatasetType.VALID] = self.eval_loader
+        self.stats.summary["delivery"] = {
+            "loader": self.delivery.loader.value, "tokenization": self.config.tokenization,
+            "read_threads": self.delivery.read_threads, "prefetch_size": self.delivery.prefetch_size,
+            "pin_memory": self.delivery.pin_memory, "iter_time": self.delivery.iter_time,
+            "multiprocessing_context": self.delivery.multiprocessing_context,
+            "host_sync": self.config.host_sync, "preload_seconds": perf_counter() - preload_started,
+            "cache_resident_bytes": sum(getattr(p, "nbytes", 0) for p in providers),
+            "train_records": len(self.train_loader.dataset),
+            "train_dropped_records_per_epoch": self.train_loader.sampler.dropped_records,
+        }
         random.seed(self.args.seed + self.rank)
         np.random.seed(self.args.seed + self.rank)
         torch.manual_seed(self.args.seed + self.rank)
@@ -225,7 +244,7 @@ class LlamaBenchmark:
         identity = {
             "backend": self.config.backend, "zero_stage": self.config.zero_stage,
             "world_size": self.world_size, "versions": {p: version(p) for p in packages},
-            "assets": source_identity, "train_data": dataset.manifest["fingerprint"],
+            "assets": source_identity, "train_data": self.train_loader.dataset.manifest["fingerprint"],
             "eval_data": self.eval_loader.dataset.manifest["fingerprint"] if self.eval_loader else None,
             "precision": self.config.precision, "attention": self.config.attention_implementation,
             "activation_checkpointing": self.config.activation_checkpointing,
@@ -260,8 +279,67 @@ class LlamaBenchmark:
         path = Path(path)
         return path if path.is_absolute() else Path(self.args.storage_root) / path
 
-    def _prepare_split(self, name, split, count):
+    def _split_identity(self, name, split, count):
         identity = dict(self.data_identity, split=split, generated_samples=count, logical_split=name)
+        if self.config.tokenization == "online":
+            identity["tokenization"] = "online"  # offline identities stay byte-identical
+        return identity
+
+    def _prepare_source(self, name, split, count, seed):
+        """Prepare what the delivery mode needs; synthetic delivery needs no files."""
+        needs_cache = (self.generation_only or self.args.generate_data or
+                       self.delivery.loader in (DataLoaderType.PYTORCH, DataLoaderType.LOAD_MEM))
+        manifest = self._prepare_split(name, split, count) if needs_cache else None
+        return {"name": name, "split": split, "count": count, "seed": seed, "manifest": manifest,
+                "identity": self._split_identity(name, split, count)}
+
+    def _build_providers(self, sources):
+        """Record providers for every split, after one collective memory check in RAM mode."""
+        kind, length = self.delivery.loader, self.config.sequence_length
+        if kind is DataLoaderType.SYNTHETIC:
+            from dlio_benchmark.data_loader.token_loader import GeneratedTokenProvider
+            return [GeneratedTokenProvider(s["seed"], s["count"], self.model_config.vocab_size, length,
+                                           self.tokenizer.pad_token_id, s["identity"]) for s in sources]
+        if self.config.tokenization == "online":
+            from functools import partial
+            from dlio_benchmark.llama.online import (OnlineTokenProvider, load_hf_tokenizer,
+                                                     load_online_manifest)
+            loader = partial(load_hf_tokenizer, self.tokenizer_source, self.tokenizer_revision,
+                             self.config.local_files_only)
+            providers = []
+            for source in sources:
+                manifest, examples = self.local_call(lambda s=source: load_online_manifest(s["manifest"]))
+                providers.append(OnlineTokenProvider(self.config.dataset_name_or_path, source["split"],
+                                                     manifest, examples, loader))
+            return providers
+        datasets = [self.local_call(lambda s=s: TokenDataset(s["manifest"])) for s in sources]
+        if kind is not DataLoaderType.LOAD_MEM:
+            return datasets
+        from mpi4py import MPI
+        from dlio_benchmark.data_loader.token_loader import (check_ram_budget, load_token_arrays,
+                                                             ram_payload_bytes)
+        need = sum(ram_payload_bytes(len(d), length) + 8 * len(d) for d in datasets)  # + sampler permutation
+        node = self.comm.Split_type(MPI.COMM_TYPE_SHARED)
+        try:
+            check_ram_budget(self.comm, need, self.delivery.memory_budget_bytes, node_comm=node)
+        finally:
+            node.Free()
+        return [self.local_call(lambda d=d: load_token_arrays(d)) for d in datasets]
+
+    def _build_loader(self, provider, batch_size, accumulation, seed):
+        from dlio_benchmark.data_loader.token_loader import WorkerTracing, build_token_loader
+        tracing = WorkerTracing.from_current_config() if self.delivery.read_threads and DFTRACER_ENABLE else None
+        return self.local_call(lambda: build_token_loader(
+            self.delivery.loader, provider, self.delivery, batch_size=batch_size, rank=self.rank,
+            world_size=self.world_size, accumulation=accumulation, seed=seed, tracing=tracing))
+
+    def _close_loaders(self):
+        for loader in (self.train_loader, self.eval_loader):
+            if loader is not None:
+                loader.close()
+
+    def _prepare_split(self, name, split, count):
+        identity = self._split_identity(name, split, count)
         root = self._storage_path(self.args.data_folder) / "llama_tokens"
         target = root / fingerprint(identity)
         self.prepared_folders.append(target)
@@ -280,9 +358,14 @@ class LlamaBenchmark:
                             raise TimeoutError("Timed out waiting for token-cache preparation")
                         sleep(0.1)
                 manifest = target / "manifest.json"
+                online = self.config.tokenization == "online"
                 if manifest.is_file():
-                    data = TokenDataset(manifest)
-                    if data.manifest["identity"] != identity:
+                    if online:
+                        from dlio_benchmark.llama.online import load_online_manifest
+                        cached = load_online_manifest(manifest)[0]
+                    else:
+                        cached = TokenDataset(manifest).manifest
+                    if cached["identity"] != identity:
                         raise ValueError("Cached token identity differs")
                     return str(manifest)
                 if self.config.data_source == "dlio_tokens" and not self.args.generate_data:
@@ -297,8 +380,13 @@ class LlamaBenchmark:
                         # Resolve main before cache generation to make preparation immutable.
                         from dataclasses import replace
                         resolved = replace(self.config, dataset_revision=self.data_identity["dataset_revision"])
-                        prepare_openhermes(temporary, resolved, self.tokenizer,
-                                          self.model_config.vocab_size, split, identity)
+                        if online:
+                            from dlio_benchmark.llama.online import prepare_online_index
+                            prepare_online_index(temporary, resolved, self.tokenizer,
+                                                 self.model_config.vocab_size, split, identity)
+                        else:
+                            prepare_openhermes(temporary, resolved, self.tokenizer,
+                                              self.model_config.vocab_size, split, identity)
                     os.rename(temporary, target)
                 except BaseException:
                     shutil.rmtree(temporary, ignore_errors=True)
@@ -331,6 +419,8 @@ class LlamaBenchmark:
             if loader.epoch != epoch:
                 loader.set_epoch(epoch)
             dft_ai.update(epoch=epoch)
+            # Never dispatch (or prefetch) more windows than a global step limit will consume.
+            loader.limit_windows(max(0, limit - runtime.optimizer_steps) if limit > 0 else None)
             while loader.cursor < loader.num_batches:
                 if limit > 0 and runtime.optimizer_steps >= limit:
                     break
@@ -352,6 +442,7 @@ class LlamaBenchmark:
                 interval = self.args.steps_between_checkpoints
                 if self.args.do_checkpoint and interval > 0 and runtime.optimizer_steps % interval == 0:
                     self.stats.checkpoints.append(self.checkpointing.save_checkpoint(loader))
+            loader.close()  # idle prefetch workers between epochs only hold memory
             completed_epoch = loader.cursor == loader.num_batches
             if completed_epoch:
                 if self.args.do_eval and epoch >= self.args.eval_after_epoch and (
@@ -366,6 +457,7 @@ class LlamaBenchmark:
         if self.args.do_checkpoint and self.config.save_final:
             if self.checkpointing.last_saved_step != runtime.optimizer_steps:
                 self.stats.checkpoints.append(self.checkpointing.save_checkpoint(loader, "final"))
+        self.stats.summary["delivery"]["intentional_delay_seconds"] = loader.delay_seconds
         self.stats.end_run(runtime, loader)
 
     def _evaluate(self, epoch):
@@ -382,12 +474,14 @@ class LlamaBenchmark:
             self.stats.evaluations.append({"epoch": epoch, "loss": loss,
                                            "samples": loader.num_batches * loader.batch_size * loader.world_size})
         finally:
+            loader.close()
             restore_rng(rng)
 
     def finalize(self):
         if self.closed:
             return
         try:
+            self._close_loaders()  # workers stop before the caches, groups and tracer go away
             if self.checkpointing:
                 self.checkpointing.finalize()
             if self.profiler_started:
@@ -403,6 +497,10 @@ class LlamaBenchmark:
     def abort(self):
         # Failure cleanup must not introduce more MPI collectives.
         try:
+            try:
+                self._close_loaders()
+            except Exception:  # cleanup keeps the original failure visible
+                pass
             if self.profiler_started:
                 self.profiler.stop()
             self.stats.summary["failed"] = True
