@@ -260,6 +260,10 @@ class TokenLoader:
 
     Uses synchronous file reads, so no worker prefetch/RNG has to be replayed.
     Remainders are dropped to complete global accumulation windows.
+
+    This is the v1 reference implementation. The native runner now builds its
+    loaders from ``dlio_benchmark.data_loader.token_loader``; this class stays as
+    the independent oracle that the equivalence tests compare those loaders with.
     """
 
     def __init__(self, dataset, batch_size, rank, world_size, accumulation=1, seed=0):

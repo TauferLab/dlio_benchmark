@@ -117,14 +117,63 @@ emitted incrementally; cross-conversation attention is allowed. The remainder
 policy is explicitly ``pad`` or ``drop``. Records with no valid prediction targets
 are omitted. ``max_samples`` limits source conversations before tokenization.
 
-The native loader reads synchronously and owns all sharding and ordering; image
-reader preprocessing/worker knobs are not used. It drops the tail needed to make
-complete global accumulation windows and reports how many samples were dropped.
-Its cursor advances only after successful compute. Gradient normalization uses
+One sampler owns all sharding and ordering for every delivery mode (see
+`Delivery modes`_). It drops the tail needed to make complete global
+accumulation windows and reports how many samples were dropped. Its cursor
+advances only after successful compute. Gradient normalization uses
 the global number of valid target tokens across the entire accumulation window.
 Evaluation uses no gradients and restores training RNG state. OpenHermes has no
 implicit evaluation split: supply ``eval_split`` from a DatasetDict or source
 that provides it, and enable ``workflow.evaluation`` explicitly.
+
+Delivery modes
+--------------
+``workload.reader`` selects how records reach the training process, and only
+explicitly set values count: omitted native settings mean the ``pytorch`` loader,
+no workers, no per-batch delay and no pinning (not the image-workload defaults).
+All modes use the same sampler and collator, so a seed gives identical
+microbatches in every mode, for any worker count.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Setting
+     - Behavior
+   * - ``data_loader: pytorch``
+     - Records read from the prepared token files. ``read_threads`` spawn
+       workers (``fork`` is rejected), ``prefetch_size`` batches ahead.
+       Workers write their own DFTracer logs.
+   * - ``data_loader: load_mem``
+     - The whole split is read once into int32 arrays on every rank before
+       training, then served from memory. Needs ``read_threads: 0`` and a positive
+       per-rank ``memory_budget_bytes``; the budget and the node's available
+       memory are checked on every rank before anything is allocated.
+   * - ``data_loader: synthetic``
+     - Records are generated from ``SeedSequence([seed, sample_id])`` and equal the
+       generated token files. No token files are needed (``generate_data: false``).
+       Not available with OpenHermes.
+   * - ``llama.tokenization: online``
+     - OpenHermes raw text is tokenized inside the workers on every read, so the
+       tokenizer's CPU time competes with training. Needs a local
+       ``datasets.save_to_disk()`` directory and ``packing: false``; records equal
+       offline preparation with ``packing: false``. Preparation lists the usable
+       examples once, outside timed training.
+   * - ``llama.host_sync: step``
+     - Loss, finiteness and target counts stay on the device; one host read per
+       optimizer step, before the update, so a nonfinite step is still rejected before
+       any weight changes. Without per-window MPI error exchange, a loader failure on
+       one rank reaches the others as a collective timeout
+       (``distributed_timeout_seconds``). The default, ``microbatch``, checks every
+       microbatch across ranks and synchronizes around each window.
+   * - ``reader.iter_time``
+     - An explicit delay per microbatch (default 0); reported separately.
+
+Memory-cache payload per split is ``records * (2 * sequence_length + 1) * 4``
+bytes, before the sampler's permutation and the batches. Reads inside workers are
+counted in a shared counter: ``application_read_bytes`` is completed reads
+including read-ahead that was not consumed yet, so one window can show zero.
+Other loaders (DALI, FFCV) are not supported for Llama; they must take their
+order from ``TokenSampler`` and register through ``register_token_loader``.
 
 Checkpointing and statistics
 ----------------------------

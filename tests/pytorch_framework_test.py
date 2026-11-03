@@ -120,3 +120,89 @@ def test_framework_native_step_updates_parameters(monkeypatch, model_type):
     assert parameter.grad is not None and torch.count_nonzero(parameter.grad) > 0
     assert not torch.equal(before, parameter.detach())
     framework.finalize()
+
+
+def test_batch_factor_default_keeps_the_whole_batch(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.delenv("BATCH_FACTOR", raising=False)
+    framework = _framework(Model.RESNET)
+    images, labels = framework._prepare_batch((torch.zeros((4, 3, 8, 8)), torch.arange(4)))
+    assert images.shape == (4, 3, 8, 8)
+    assert labels.tolist() == [0, 1, 2, 3]
+    inputs = torch.zeros((4, 3, 8, 8))
+    same_inputs, same_target = framework._take_compute_share(inputs, None)
+    assert same_inputs is inputs and same_target is None
+
+
+@pytest.mark.parametrize("factor", [2, 4])
+def test_batch_factor_resnet_trains_on_the_first_share(monkeypatch, factor):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setenv("BATCH_FACTOR", str(factor))
+    framework = _framework(Model.RESNET)
+    loaded = 8
+    inputs = torch.arange(loaded, dtype=torch.float32).reshape(loaded, 1, 1, 1).expand(loaded, 3, 4, 4).contiguous()
+    images, labels = framework._prepare_batch((inputs, torch.arange(loaded)))
+    share = loaded // factor
+    assert images.shape == (share, 3, 4, 4)
+    assert torch.equal(images, inputs[:share])
+    assert labels.tolist() == list(range(share))
+
+
+def test_batch_factor_cuts_before_any_copy(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setenv("BATCH_FACTOR", "4")
+    framework = _framework(Model.RESNET)
+    inputs = torch.zeros((8, 16, 16), dtype=torch.uint8)
+    cut, target = framework._take_compute_share(inputs, None)
+    assert cut.shape == (2, 16, 16) and target is None
+    assert cut.data_ptr() == inputs.data_ptr()  # a view of the loaded batch, nothing copied
+    images, _ = framework._prepare_batch(inputs)
+    assert images.shape == (2, 3, 16, 16)  # the 2-D to 3-channel repeat ran on the share only
+
+
+def test_batch_factor_unet_trains_on_the_first_share(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setenv("BATCH_FACTOR", "2")
+    framework = _framework(Model.UNET)
+    volume = torch.arange(4, dtype=torch.float32).reshape(4, 1, 1, 1, 1).expand(4, 1, 4, 4, 4).contiguous()
+    masks = torch.arange(4).reshape(4, 1, 1, 1).expand(4, 4, 4, 4).contiguous()
+    inputs, target = framework._prepare_batch((volume, masks))
+    assert inputs.shape == (2, 1, 4, 4, 4)
+    assert torch.equal(inputs, volume[:2])
+    assert target[:, 0, 0, 0].tolist() == [0, 1]
+
+
+def test_batch_factor_rejects_an_indivisible_batch(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setenv("BATCH_FACTOR", "4")
+    framework = _framework(Model.RESNET)
+    with pytest.raises(ValueError, match="not divisible by BATCH_FACTOR=4"):
+        framework._prepare_batch((torch.zeros((6, 3, 8, 8)), torch.arange(6)))
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "two", "1.5", ""])
+def test_batch_factor_rejects_bad_values(monkeypatch, value):
+    monkeypatch.setenv("BATCH_FACTOR", value)
+    framework = _framework(Model.RESNET)
+    with pytest.raises(ValueError, match="BATCH_FACTOR must be a positive integer"):
+        framework._batch_factor()
+
+
+def test_framework_native_step_with_batch_factor(monkeypatch):
+    torch = pytest.importorskip("torch")
+    mpi = DLIOMPI.get_instance()
+    try:
+        mpi.size()
+    except Exception:
+        mpi.initialize()
+    from dlio_benchmark.framework import torch_framework as module
+    torch.set_num_threads(1)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(module, "DFTRACER_ENABLE", False)
+    monkeypatch.setenv("BATCH_FACTOR", "2")
+
+    framework = module.TorchFramework(False, Model.RESNET)
+    prediction, loss = framework.compute((torch.randn(4, 3, 64, 64), torch.tensor([0, 1, 2, 3])), 1, 1, 0)
+    assert tuple(prediction.shape) == (2, 1000)  # 4 loaded samples, 2 trained
+    assert torch.isfinite(loss)
+    framework.finalize()

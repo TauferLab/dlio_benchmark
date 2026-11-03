@@ -100,6 +100,7 @@ class TorchFramework(Framework):
             self.args.logger.warning(
                 "Communication requested without native compute; no gradients will be exchanged"
             )
+        self._batch_factor()
 
     def _configure_distributed(self, model, communication):
         """Wrap a native module with MPI-sized DDP when requested."""
@@ -282,9 +283,43 @@ class TorchFramework(Framework):
             return torch.utils.dlpack.from_dlpack(value)
         return torch.as_tensor(value)
 
+    def _batch_factor(self):
+        """BATCH_FACTOR (env, default 1): the loader delivers n samples per step and the model trains on the first n // BATCH_FACTOR."""
+        factor = getattr(self, "_batch_factor_value", None)
+        if factor is None:
+            raw = os.environ.get("BATCH_FACTOR", "1")
+            try:
+                factor = int(raw)
+            except ValueError:
+                factor = 0
+            if factor < 1:
+                raise ValueError(f"BATCH_FACTOR must be a positive integer; got {raw!r}")
+            self._batch_factor_value = factor
+            args = getattr(self, "args", None)
+            if factor > 1 and args is not None:
+                args.logger.output(
+                    f"BATCH_FACTOR={factor}: the loader delivers batches of n samples, "
+                    f"the model trains on the first n // {factor} of each"
+                )
+        return factor
+
+    def _take_compute_share(self, inputs, target):
+        """Cut a loaded batch to the compute share before any copy, so the discarded samples cost no host or device work here."""
+        factor = self._batch_factor()
+        if factor == 1:
+            return inputs, target
+        loaded = inputs.shape[0]
+        if loaded % factor:
+            raise ValueError(f"Loader batch of {loaded} samples is not divisible by BATCH_FACTOR={factor}")
+        share = loaded // factor
+        if target is not None:
+            target = self._as_tensor(target)[:share]
+        return inputs[:share], target
+
     def _prepare_resnet_batch(self, batch):
         inputs, target = self._split_batch(batch)
         inputs = self._as_tensor(inputs)
+        inputs, target = self._take_compute_share(inputs, target)
 
         if inputs.ndim == 2:
             inputs = inputs.unsqueeze(1).unsqueeze(2).repeat(1, 3, 1, 1)
@@ -328,6 +363,7 @@ class TorchFramework(Framework):
     def _prepare_unet_batch(self, batch):
         inputs, target = self._split_batch(batch)
         inputs = self._as_tensor(inputs)
+        inputs, target = self._take_compute_share(inputs, target)
 
         if inputs.ndim == 3:
             inputs = inputs.unsqueeze(1).unsqueeze(2)
