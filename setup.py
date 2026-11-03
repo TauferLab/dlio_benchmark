@@ -35,7 +35,18 @@ if "ppc" in sysconfig.get_platform():
 else:
     deps.extend(x86_deps)
 
+llama_deps = [
+    "torch>=2.9.1,<2.10",
+    "transformers>=4.57.3,<4.58",
+    "datasets>=4.4.2,<4.5",
+]
+
 extras = {
+    "llama": llama_deps,
+    "llama-deepspeed": llama_deps + [
+        "deepspeed>=0.18.4,<0.19",
+        "accelerate>=1.12.0,<1.13",
+    ],
     "test": test_deps,
     "dftracer": [],  # Compatibility alias: pydftracer[dynamo] is in core_deps.
     "cuda": [

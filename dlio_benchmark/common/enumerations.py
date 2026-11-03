@@ -118,6 +118,7 @@ class Model(Enum):
     RESNET = 'resnet50'
     UNET= 'unet3d'
     BERT = 'bert'
+    LLAMA = 'llama'
     SLEEP = 'sleep'
     DEFAULT = 'default'
 

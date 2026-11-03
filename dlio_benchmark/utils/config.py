@@ -1114,7 +1114,7 @@ def LoadConfig(args, config):
         if 'checkpoint_mechanism_classname' in config['checkpoint']:
             args.checkpoint_mechanism_classname = config['checkpoint']['checkpoint_mechanism_classname']
         if 'fsync' in config['checkpoint']:
-            args.checkpoint_sync = config['checkpoint']['fsync']
+            args.checkpoint_fsync = config['checkpoint']['fsync']
         if 'time_between_checkpoints' in config['checkpoint']:
             args.time_between_checkpoints = config['checkpoint']['time_between_checkpoints']
         if 'num_checkpoints_write' in config['checkpoint']:
@@ -1122,7 +1122,7 @@ def LoadConfig(args, config):
         if 'num_checkpoints_read' in config['checkpoint']:
             args.num_checkpoints_read = config['checkpoint']['num_checkpoints_read']
         if 'recovery_rank_shift' in config['checkpoint']:
-            args.checkpoint_recover_rank_shift = config['checkpoint']['recovery_rank_shift']
+            args.checkpoint_recovery_rank_shift = config['checkpoint']['recovery_rank_shift']
         if 'rank_sync' in config['checkpoint']:
             args.checkpoint_rank_sync = config['checkpoint']['rank_sync']
         if 'mode' in config['checkpoint']:

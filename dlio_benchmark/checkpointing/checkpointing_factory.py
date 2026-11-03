@@ -26,6 +26,12 @@ class CheckpointingFactory(object):
         pass
 
     @staticmethod
+    def get_native_llama_mechanism(runtime, config, folder, identity, fsync=False):
+        """Native checkpoints receive live state and never allocate fake tensors."""
+        from dlio_benchmark.checkpointing.llama_checkpointing import LlamaCheckpointing
+        return LlamaCheckpointing(runtime, config, folder, identity, fsync)
+
+    @staticmethod
     def get_mechanism(checkpoint_mechanism_type):
         _args = ConfigArguments.get_instance()
         if _args.checkpoint_mechanism_class is not None:

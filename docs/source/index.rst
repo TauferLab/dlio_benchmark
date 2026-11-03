@@ -28,6 +28,7 @@ GitHub repo: https://github.com/argonne-lcf/dlio_benchmark.
    config
    run
    examples
+   llama
 
 .. toctree::
    :maxdepth: 1

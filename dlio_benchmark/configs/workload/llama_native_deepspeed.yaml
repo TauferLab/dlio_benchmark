@@ -1,0 +1,9 @@
+defaults:
+  - llama_native_fsdp
+  - _self_
+checkpoint:
+  checkpoint_folder: checkpoints/llama-native-deepspeed
+llama:
+  backend: deepspeed
+  zero_stage: 3
+  deepspeed_config: {}

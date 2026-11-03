@@ -1,0 +1,14 @@
+defaults:
+  - llama_native_fsdp
+  - _self_
+llama:
+  data_source: openhermes
+  dataset_name_or_path: teknium/OpenHermes-2.5
+  dataset_revision: b82037821055c377bed0d495e72e46de3bc72e84
+  dataset_split: train
+  eval_split: ""
+  conversation_format: role_lines_v1
+  loss: full
+  max_samples: 1024
+  packing: true
+  packing_remainder: pad
