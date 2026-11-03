@@ -1,8 +1,21 @@
 **Reviewed draft: share DLIO's benchmark lifecycle and data loaders with Llama**
 
-Execution tracking: [shared Llama TODO](/g/g20/dhakshinamoo1/ledger/LLAMA_TODO.md).
+Execution tracking: the shared Llama TODO (kept outside this repository).
 See the source-verification appendix for the 2026-10-22 review and concrete
-implementation clarifications. All implementation tasks remain pending.
+implementation clarifications.
+
+> **Status, 2026-11-02: partly implemented.** Built: one shared sampler with
+> disk, RAM and generated-token delivery for the native runner (steps 3 and 4),
+> explicit `workload.reader` settings, bounded worker lifetime, per-worker
+> tracing, online tokenization (not part of this design) and
+> `llama.host_sync=step`. Only partly built: the shared contracts (step 1, no
+> dataset-description or window-result types), preparation extraction (step 2)
+> and metrics (step 7, a minimal `summary["delivery"]` record). Not built: the
+> `TorchFramework` runtime selection (step 5), the shared lifecycle and v2
+> checkpoints (step 6) and the removal of `LlamaBenchmark` and `LlamaFramework`
+> (step 8); the native runner is kept. `docs/source/llama.rst` describes current
+> behavior. The text below is the original proposal and still describes the
+> work that was not built.
 
 The proposed result is one `DLIOBenchmark` lifecycle for Llama, ResNet, UNet,
 and synthetic workloads. Llama will use `TorchFramework`, `ModelFactory`, and
@@ -39,7 +52,7 @@ Relevant source:
 - [Reader base and placeholder image return](../dlio_benchmark/reader/reader_handler.py).
 - [Token records and current sampler](../dlio_benchmark/llama/data.py).
 
-Four isolated CPU probes were run with the existing `/tmp/dlio-llama-test-env`
+Four isolated CPU probes were run in an isolated temporary
 environment, Torch 2.9.1+cpu, ten generated records, sequence length eight, and
 batch size two. The temporary records were removed after the probes.
 
@@ -519,11 +532,11 @@ steps and removal of both Llama-specific orchestration classes.
 
 ## Source verification and implementation clarifications — 2026-10-22
 
-Reviewed on matrix2 against the current `feat/llama` worktree at
+Reviewed against the current `feat/llama` worktree at
 `1035482c4ba390e0b485008e706863a79cbbd0a7`, including its existing uncommitted
 files. This review confirms source structure and refines the proposed contracts;
 it does not rerun the earlier CPU probes or establish GPU support.
-The execution breakdown is [LLAMA_TODO.md](/g/g20/dhakshinamoo1/ledger/LLAMA_TODO.md).
+The execution breakdown is in the shared Llama TODO (kept outside this repository).
 L00–L11 expand the eight migration steps above; Q01–Q04 track cluster/feature
 qualification and F01 tracks deferred aggregation. Their acceptance evidence is
 required before any implementation item is marked complete.

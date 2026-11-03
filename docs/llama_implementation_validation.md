@@ -4,7 +4,7 @@ The working tree implements real pretrained Llama training through DLIO's normal
 
 ## Local evidence
 
-Validation used an isolated `/tmp/dlio-llama-test-env` environment, leaving the shared Python installation unchanged: Python 3.13.2, Torch 2.9.1+cpu, Transformers 4.57.3, Datasets 4.4.2, DeepSpeed 0.18.4, Accelerate 1.12.0, and pydftracer 2.0.3. `pip check` reported no broken requirements. No GPUs were visible.
+Validation used an isolated temporary environment, leaving the shared Python installation unchanged: Python 3.13.2, Torch 2.9.1+cpu, Transformers 4.57.3, Datasets 4.4.2, DeepSpeed 0.18.4, Accelerate 1.12.0, and pydftracer 2.0.3. `pip check` reported no broken requirements. No GPUs were visible.
 
 | Check | Result |
 | --- | --- |
