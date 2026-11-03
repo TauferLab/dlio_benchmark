@@ -304,8 +304,26 @@ class WorkerTracing:
 
     @classmethod
     def from_current_config(cls):
+        """Snapshot of the shared config for workers, without any MPI object.
+
+        ``LlamaBenchmark`` keeps its communicator on the shared config as ``comm``. Unpickling it
+        in a spawned worker imports mpi4py and calls MPI_Init inside the parent's Slurm step; the
+        PMI socket is not the worker's to use, so MVAPICH fails and the worker segfaults
+        (smoke job 472287). Workers only need the plain settings, so ``comm`` is left out while
+        pickling and put back for the parent.
+        """
         from dlio_benchmark.utils.config import ConfigArguments
-        return cls(pickle.dumps(ConfigArguments.get_instance()))
+        args = ConfigArguments.get_instance()
+        absent = object()
+        communicator = args.__dict__.pop("comm", absent)
+        try:
+            blob = pickle.dumps(args)
+        finally:
+            if communicator is not absent:
+                args.comm = communicator
+        if b"mpi4py" in blob:  # fail here, in the parent, not as a worker crash under Slurm
+            raise RuntimeError("The worker tracing spec embeds an MPI object; workers must not unpickle MPI state")
+        return cls(blob)
 
     def __call__(self, worker_id):
         if self.serial_args is None:

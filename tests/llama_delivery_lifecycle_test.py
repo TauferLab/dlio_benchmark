@@ -3,6 +3,8 @@
 from copy import deepcopy
 import json
 import pickle
+import subprocess
+import sys
 
 import pytest
 
@@ -177,3 +179,42 @@ def test_each_fetch_is_marked_with_the_optimizer_step_it_feeds(harness, monkeypa
     monkeypatch.setattr(bm.LlamaBenchmark, "_fetch", fetch)
     run("marked", MODES["disk"], STEPS)
     assert events == [item for k in range(1, STEPS + 1) for item in (("step", k), ("fetch",))]
+
+
+def test_worker_tracing_spec_carries_no_mpi_communicator(tmp_path):
+    """LlamaBenchmark keeps its MPI communicator on the shared config. A spawned worker that unpickled it
+    would call MPI_Init inside the Slurm step and segfault (smoke job 472287), so it must never travel."""
+    from mpi4py import MPI
+    initialize_mpi()
+    from dlio_benchmark.data_loader.token_loader import WorkerTracing
+    from dlio_benchmark.utils.config import ConfigArguments
+    ConfigArguments.reset()
+    args = ConfigArguments.get_instance()
+    args.comm = MPI.COMM_WORLD
+    try:
+        spec = WorkerTracing.from_current_config()
+        assert b"mpi4py" not in spec.serial_args
+        assert args.comm is MPI.COMM_WORLD, "the parent keeps its communicator"
+    finally:
+        ConfigArguments.reset()
+    blob = tmp_path / "spec.bin"
+    blob.write_bytes(spec.serial_args)
+    # a fresh process, like a spawned worker: unpickling must not import (and so initialize) MPI
+    code = ("import pickle, sys; import dlio_benchmark.utils.config; pickle.loads(open(sys.argv[1], 'rb').read()); "
+            "print('MPI_IMPORTED', 'mpi4py.MPI' in sys.modules)")
+    result = subprocess.run([sys.executable, "-c", code, str(blob)], capture_output=True, text=True, timeout=120)
+    assert "MPI_IMPORTED False" in result.stdout, result.stdout + result.stderr
+
+
+def test_a_config_without_a_communicator_still_gives_a_spec(tmp_path):
+    from dlio_benchmark.data_loader.token_loader import WorkerTracing
+    from dlio_benchmark.utils.config import ConfigArguments
+    initialize_mpi()
+    ConfigArguments.reset()
+    args = ConfigArguments.get_instance()
+    args.__dict__.pop("comm", None)
+    try:
+        assert WorkerTracing.from_current_config().serial_args
+        assert "comm" not in args.__dict__, "no communicator may be invented"
+    finally:
+        ConfigArguments.reset()
